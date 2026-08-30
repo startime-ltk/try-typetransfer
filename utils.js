@@ -27,6 +27,10 @@ const {
   pdfTextTargets,
   pdfImageTargets,
   audioInput,
+  qqmusicInput,
+  kugouInput,
+  kuwoInput,
+  ncmInput,
   videoInput,
   mediaAudioTargets,
   mediaVideoTargets,
@@ -121,6 +125,10 @@ function categoryForExt(rawExt) {
   if (presentationInput.has(ext) || presentationInput.has(rawExt)) return "presentation";
   if (textInput.has(ext) || textInput.has(rawExt)) return "text";
   if (audioInput.has(ext) || audioInput.has(rawExt)) return "audio";
+  if (qqmusicInput.has(ext) || qqmusicInput.has(rawExt)) return "qqmusic";
+  if (kugouInput.has(ext) || kugouInput.has(rawExt)) return "kugou";
+  if (kuwoInput.has(ext) || kuwoInput.has(rawExt)) return "kuwo";
+  if (ncmInput.has(ext) || ncmInput.has(rawExt)) return "ncm";
   if (videoInput.has(ext) || videoInput.has(rawExt)) return "video";
   if (ext === "zip") return "zip";
   return "unknown";
@@ -194,6 +202,18 @@ function targetsForExt(rawExt, tools) {
 
   if (category === "audio" && tools.ffmpeg) {
     mediaAudioTargets.forEach((target) => targets.add(target));
+  }
+
+  // QQ 音乐加密格式：仅支持转 MP3（依赖官方授权接口解密 + 短信验证码）。
+  if (category === "qqmusic") {
+    targets.add("mp3");
+    return [...targets];
+  }
+
+  // 酷狗/酷我/网易云加密格式：仅支持转 MP3（本地算法解锁 + 短信验证码）。
+  if (["kugou", "kuwo", "ncm"].includes(category)) {
+    targets.add("mp3");
+    return [...targets];
   }
 
   if (category === "video" && tools.ffmpeg) {

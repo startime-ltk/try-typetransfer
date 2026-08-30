@@ -159,9 +159,15 @@ const pdfTextTargets = ["xlsx", "txt", "html", "docx"];
 const pdfImageTargets = ["png", "jpg"];
 const pdfTargets = [...pdfTextTargets, ...pdfImageTargets, "pdf"];
 const audioInput = new Set(["mp3", "wav", "flac", "m4a", "aac", "ogg", "opus", "wma"]);
-// 注意（2026-08-15 起）：仅支持普通音频格式转换。其他音乐平台特殊格式
-// （NCM/KGG/mflac/mgg/kgma/mmp4/kwm/vpr 等）已下架——这些是
-// DRM 规避格式，存在法律风险，见 docs/分发与合规规范.md。
+// QQ 音乐加密格式（经官方授权接口解密后转 MP3，见 qqmusic-convert.js）。
+// 与普通音频分开管理：仅支持转 MP3，且必须通过短信验证码校验（付费授权）。
+const qqmusicInput = new Set(["mflac", "mflac0", "mgg", "mgg1", "qmc0", "qmc3", "qmc6", "qmcflac", "qmcogg", "tkm", "qmc"]);
+// 酷狗音乐加密格式（KGM/KGMA/VPR，本地算法解锁后转 MP3，见 music-platform-convert.js）。
+const kugouInput = new Set(["kgm", "kgma", "vpr"]);
+// 酷我音乐加密格式（KWM，本地算法解锁后转 MP3）。
+const kuwoInput = new Set(["kwm"]);
+// 网易云音乐加密格式（NCM，本地算法解锁后转 MP3）。
+const ncmInput = new Set(["ncm"]);
 const videoInput = new Set(["mp4", "mov", "mkv", "webm", "avi", "m4v", "wmv", "flv"]);
 const mediaAudioTargets = ["mp3", "wav", "flac", "m4a", "ogg", "aac", "opus", "wma"];
 const mediaVideoTargets = ["mp4", "webm", "mkv", "mov", "gif"];
@@ -225,6 +231,10 @@ module.exports = {
   pdfImageTargets,
   pdfTargets,
   audioInput,
+  qqmusicInput,
+  kugouInput,
+  kuwoInput,
+  ncmInput,
   videoInput,
   mediaAudioTargets,
   mediaVideoTargets,

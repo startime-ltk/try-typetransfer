@@ -61,6 +61,8 @@ const {
   escapeHtml
 } = require("./utils");
 const { convertMedia, probeAudioTrack } = require("./media");
+const { qqmusicToMp3 } = require("./qqmusic-convert");
+const { kgmToMp3, vprToMp3, kwmToMp3, ncmToMp3 } = require("./music-platform-convert");
 const { zipFile, zipFiles, openZipEntries, readZipEntryToFile, listZipEntries } = require("./zip-util");
 const {
   convertPdfDecrypt,
@@ -168,6 +170,10 @@ const {
   pdfTextTargets,
   pdfImageTargets,
   audioInput,
+  qqmusicInput,
+  kugouInput,
+  kuwoInput,
+  ncmInput,
   videoInput,
   mediaAudioTargets,
   mediaVideoTargets,
@@ -352,7 +358,7 @@ app.get("/api/capabilities", async (_req, res) => {
       spreadsheet: { inputs: [...spreadsheetInput].sort(), targets: spreadsheetTargets, experimentalInputs: experimentalInputsByCategory.spreadsheet },
       presentation: { inputs: [...presentationInput].sort(), targets: presentationTargets, experimentalInputs: experimentalInputsByCategory.presentation },
       pdf: { inputs: [...pdfInput].sort(), targets: [...pdfTextTargets, ...(tools.poppler ? [...pdfImageTargets, "pdf"] : [])] },
-      audio: { inputs: [...audioInput].sort(), targets: mediaAudioTargets, experimentalInputs: experimentalInputsByCategory.audio },
+      audio: { inputs: [...audioInput, ...qqmusicInput, ...kugouInput, ...kuwoInput, ...ncmInput].sort(), targets: mediaAudioTargets, experimentalInputs: experimentalInputsByCategory.audio },
       video: { inputs: [...videoInput].sort(), targets: mediaTargets },
       any: { inputs: ["*"], targets: ["zip"] }
     },
@@ -609,6 +615,23 @@ app.post("/api/convert", assertLocalWebRequest, upload.single("file"), async (re
       // 透明背景色：white / black / 十六进制色值（白名单在 alphaCompositeArgs 内校验）。
       const alphaBackground = String(req.body?.alphaBackground || "").trim() || "white";
       await convertMedia(file.path, outputPath, requestedTarget, category, { videoCodec, alphaBackground });
+    } else if (category === "qqmusic") {
+      // QQ 音乐加密格式：官方授权接口解密后转 MP3。
+      await qqmusicToMp3(file.path, outputPath, {});
+    } else if (category === "kugou") {
+      // 酷狗音乐加密格式：本地算法解锁后转 MP3。
+      const isVpr = extFromName(file.originalname) === "vpr";
+      if (isVpr) {
+        await vprToMp3(file.path, outputPath, {});
+      } else {
+        await kgmToMp3(file.path, outputPath, {});
+      }
+    } else if (category === "kuwo") {
+      // 酷我音乐加密格式：本地算法解锁后转 MP3。
+      await kwmToMp3(file.path, outputPath, {});
+    } else if (category === "ncm") {
+      // 网易云音乐加密格式：本地算法解锁后转 MP3。
+      await ncmToMp3(file.path, outputPath, {});
     } else {
       throw new Error("暂时无法识别这个文件类型。");
     }
@@ -663,7 +686,14 @@ app.post("/api/convert", assertLocalWebRequest, upload.single("file"), async (re
       "PRESENTATION_HTML_EMPTY",
       "BMP_UNSUPPORTED_VARIANT",
       "JSON_CSV_PATH_COLLISION",
-      "PDF_TABLE_OCR_LOW_QUALITY"
+      "PDF_TABLE_OCR_LOW_QUALITY",
+      "MUSIC_DECRYPT_INVALID",
+      "KGM_READ_FAILED",
+      "KGM_CONVERT_FAILED",
+      "KWM_READ_FAILED",
+      "KWM_CONVERT_FAILED",
+      "NCM_READ_FAILED",
+      "NCM_CONVERT_FAILED"
     ].includes(error?.code);
     const isResourceLimitError = error instanceof ResourceLimitError;
     const isOfficeEngineError = error instanceof OfficeEngineError;

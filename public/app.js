@@ -135,7 +135,7 @@ const messages = {
     "pdfGroupSize.label": "每几页一组",
     "settings.aria": "转换设置", "progress.label": "转换进度", "status.ready": "选择文件后会显示可用的转换格式。",
     "formats.aria": "支持格式", "formats.title": "当前支持",
-    "formats.description": "文档转换会尽量保留排版；PDF 可导出页面图片，图片和扫描版 PDF 可 OCR 转 TXT。音频仅支持普通格式转换（MP3/WAV/FLAC/AAC/OGG 等），不支持其他音乐平台的加密特殊格式。",
+    "formats.description": "文档转换会尽量保留排版；PDF 可导出页面图片，图片和扫描版 PDF 可 OCR 转 TXT。音频支持普通格式与音乐平台加密格式（QQ 音乐 mflac/mgg、酷狗 kgm/kgma/vpr、酷我 kwm、网易云 ncm，免费转 MP3）。",
     "sponsor.aria": "支持鼠鼠", "sponsor.close": "收起", "sponsor.title": "请鼠鼠吃小鱼干 🐟",
     "sponsor.description": "本软件永久免费。如果帮到了你，欢迎请鼠鼠吃根小鱼干～纯自愿。若有人收费售卖本软件，那一定是套壳圈钱的骗子，请勿上当。",
     "sponsor.qrAlt": "微信收款码",
@@ -143,7 +143,7 @@ const messages = {
     "feedback.guide": "问题反馈：转换遇到问题，请导出诊断报告并查看错误提示，帮助信息详见软件说明。",
     "tutorial.close": "关闭",
     "tutorial.copyTemplate": "复制模板",
-    "tutorial.gotIt": "我知道了"
+    "tutorial.gotIt": "我知道了",
   },
   "en-US": {
     "workspace.aria": "File conversion workspace", "brand.title": "Let Mouse convert files into the format you need",
@@ -182,7 +182,7 @@ const messages = {
     "pdfGroupSize.label": "Pages per group",
     "settings.aria": "Conversion settings", "progress.label": "Conversion progress", "status.ready": "Available target formats appear after you select files.",
     "formats.aria": "Supported formats", "formats.title": "Supported now",
-    "formats.description": "Document conversion preserves layout where possible; PDFs can export page images, and images and scanned PDFs can be OCRed to TXT. Audio supports only ordinary formats (MP3/WAV/FLAC/AAC/OGG etc.); encrypted formats from music platforms are not supported.",
+    "formats.description": "Document conversion preserves layout where possible; PDFs can export page images, and images and scanned PDFs can be OCRed to TXT. Audio supports ordinary formats plus music-platform encrypted formats (QQ Music mflac/mgg, KuGou kgm/kgma/vpr, KuWo kwm, NetEase ncm; MP3 after paid authorization).",
     "sponsor.aria": "Support Mouse", "sponsor.close": "Close", "sponsor.title": "Buy Mouse a dried fish 🐟",
     "sponsor.description": "This app is permanently free. If it helped you, you can buy Mouse a snack — completely optional. If anyone charges you for this app, it's a scam.",
     "sponsor.qrAlt": "WeChat payment QR code",
@@ -190,7 +190,7 @@ const messages = {
     "feedback.guide": "Feedback: if a conversion fails, export the diagnostics report and check the error details. Help is described in the app documentation.",
     "tutorial.close": "Close",
     "tutorial.copyTemplate": "Copy template",
-    "tutorial.gotIt": "Got it"
+    "tutorial.gotIt": "Got it",
   }
 };
 
@@ -245,6 +245,10 @@ const labels = {
   presentation: "PPT/WPS 演示",
   pdf: "PDF",
   audio: "音频",
+  qqmusic: "QQ 音乐",
+  kugou: "酷狗音乐",
+  kuwo: "酷我音乐",
+  ncm: "网易云音乐",
   video: "视频",
   any: "任意文件",
   unknown: "未知类型"
@@ -259,7 +263,7 @@ const statusLabels = {
 
 const englishLabels = {
   image: "Image", text: "Text", document: "Word/WPS document", spreadsheet: "Excel/WPS spreadsheet",
-  presentation: "PPT/WPS presentation", pdf: "PDF", audio: "Audio", video: "Video", any: "Any file", unknown: "Unknown type"
+  presentation: "PPT/WPS presentation", pdf: "PDF", audio: "Audio", qqmusic: "QQ Music", kugou: "KuGou Music", kuwo: "KuWo Music", ncm: "NetEase Cloud Music", video: "Video", any: "Any file", unknown: "Unknown type"
 };
 const englishStatusLabels = { pending: "Waiting", converting: "Converting", success: "Complete", error: "Failed" };
 const categoryLabel = (key) => i18n.language === "en-US" ? (englishLabels[key] || englishLabels.unknown) : (labels[key] || labels.unknown);
@@ -775,7 +779,7 @@ function localizedWarnings(result) {
   }).filter(Boolean);
 }
 
-async function convertOneFile(file, targetFormat) {
+async function convertOneFile(file, targetFormat, index) {
   const form = new FormData();
   form.append("file", file);
   form.append("targetFormat", targetFormat);
@@ -963,6 +967,7 @@ async function convertCurrentFiles() {
   if (!state.files.length || !targetSelect.value || state.isConverting) return;
 
   const targetFormat = targetSelect.value;
+
   state.isConverting = true;
   convertButton.disabled = true;
   targetSelect.disabled = true;
@@ -1005,7 +1010,7 @@ async function convertCurrentFiles() {
     }
 
     try {
-      const result = await convertOneFile(file, targetFormat);
+      const result = await convertOneFile(file, targetFormat, index);
       successCount += 1;
       let detail = result.fileName;
       if (targetFormat === "zip" && result.compressionRatio != null) {
@@ -1018,7 +1023,6 @@ async function convertCurrentFiles() {
       failCount += 1;
       rendererLog("warn", `转换失败: "${file.name || "未知文件"}" -> ${targetFormat}: ${error.message || error}`);
       setBatchResult(index, { status: "error", detail: error.message || (i18n.language === "en-US" ? "Unknown error" : "未知错误") });
-      maybeShowQqTutorial(error);
     }
   }
 

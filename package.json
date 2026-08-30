@@ -40,7 +40,7 @@
     "multer": "^2.0.2",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.2.108",
-    "sanitize-filename": "^1.6.3",
+    "sanitize-filename": "^1.6.4",
     "sharp": "^0.35.3",
     "sql.js": "^1.14.1",
     "tesseract.js": "^7.0.0",
@@ -49,7 +49,8 @@
     "yazl": "^3.3.1"
   },
   "overrides": {
-    "uuid": "^11.1.1"
+    "uuid": "^11.1.1",
+    "@noble/hashes": "1.8.0"
   },
   "devDependencies": {
     "electron": "^43.1.0",
@@ -113,7 +114,9 @@
       "public/**/*",
       "agent-skill/**/*",
       "package.json",
-      "node_modules/**/*"
+      "node_modules/**/*",
+      "music-platform-convert.js",
+      "qqmusic-convert.js"
     ],
     "asarUnpack": [
       "node_modules/sharp/**/*",
@@ -132,34 +135,6 @@
         {
           "from": "bin/avs3",
           "to": "avs3"
-        },
-        {
-          "from": "bin/libreoffice",
-          "to": "libreoffice"
-        },
-        {
-          "from": "bin/poppler",
-          "to": "poppler"
-        },
-        {
-          "from": "bin/tessdata",
-          "to": "tessdata"
-        },
-        {
-          "from": "bin/dcraw",
-          "to": "dcraw"
-        },
-        {
-          "from": "bin/docengine",
-          "to": "docengine"
-        },
-        {
-          "from": "bin/qpdf/extracted/qpdf-12.4.0-msvc64",
-          "to": "qpdf"
-        },
-        {
-          "from": "bin/docstructure",
-          "to": "docstructure"
         },
         {
           "from": "node_modules/@tesseract.js-data/tha/4.0.0_best_int/tha.traineddata.gz",
