@@ -42,6 +42,21 @@ public final class FormatKit {
         EXT_CATEGORY.put("csv", "data");
         EXT_CATEGORY.put("zip", "zip");
         EXT_CATEGORY.put("epub", "epub");
+        // 加密音乐（解锁为目标）
+        EXT_CATEGORY.put("ncm", "music");
+        EXT_CATEGORY.put("kgm", "music");
+        EXT_CATEGORY.put("kgma", "music");
+        EXT_CATEGORY.put("vpr", "music");
+        EXT_CATEGORY.put("kwm", "music");
+        // 普通音频（互转，走 FFmpegKit）
+        EXT_CATEGORY.put("mp3", "audio");
+        EXT_CATEGORY.put("wav", "audio");
+        EXT_CATEGORY.put("flac", "audio");
+        EXT_CATEGORY.put("m4a", "audio");
+        EXT_CATEGORY.put("aac", "audio");
+        EXT_CATEGORY.put("ogg", "audio");
+        EXT_CATEGORY.put("opus", "audio");
+        EXT_CATEGORY.put("wma", "audio");
 
         // 图片
         EXT_TARGETS.put("png", targets(new Target("jpg", "JPG"), new Target("webp", "WEBP"), new Target("bmp", "BMP"), new Target("pdf", "转 PDF")));
@@ -64,6 +79,22 @@ public final class FormatKit {
         // ZIP / EPUB
         EXT_TARGETS.put("zip", targets(new Target("unzip", "解压 ZIP")));
         EXT_TARGETS.put("epub", targets(new Target("txt", "提取 TXT")));
+        // 加密音乐 → 解锁原始音频容器
+        EXT_TARGETS.put("ncm", targets(new Target("unlock", "解锁音频")));
+        EXT_TARGETS.put("kgm", targets(new Target("unlock", "解锁音频")));
+        EXT_TARGETS.put("kgma", targets(new Target("unlock", "解锁音频")));
+        EXT_TARGETS.put("vpr", targets(new Target("unlock", "解锁音频")));
+        EXT_TARGETS.put("kwm", targets(new Target("unlock", "解锁音频")));
+        // 普通音频互转：对齐桌面版 mediaAudioTargets，目标 = 其余 7 种格式
+        String[] audios = {"mp3", "wav", "flac", "m4a", "ogg", "aac", "opus", "wma"};
+        for (int i = 0; i < audios.length; i++) {
+            List<Target> list = new ArrayList<>();
+            for (int j = 0; j < audios.length; j++) {
+                if (i == j) continue;
+                list.add(new Target(audios[j], audios[j].toUpperCase(Locale.ROOT)));
+            }
+            EXT_TARGETS.put(audios[i], Collections.unmodifiableList(list));
+        }
     }
 
     /** 汇总页分组：标题 + 若干行说明 */
@@ -94,6 +125,10 @@ public final class FormatKit {
         groups.add(new SummaryGroup("数据", Arrays.asList(line("json"), line("xml"), line("csv"))));
         groups.add(new SummaryGroup("压缩包", Collections.singletonList(line("zip"))));
         groups.add(new SummaryGroup("电子书", Collections.singletonList(line("epub"))));
+        groups.add(new SummaryGroup("音乐解锁",
+                Arrays.asList(line("ncm"), line("kgm", "kgma"), line("vpr"), line("kwm"))));
+        groups.add(new SummaryGroup("音频互转",
+                Arrays.asList(line("mp3"), line("wav"), line("flac"), line("m4a"), line("aac"), line("ogg"), line("opus"), line("wma"))));
         return groups;
     }
 

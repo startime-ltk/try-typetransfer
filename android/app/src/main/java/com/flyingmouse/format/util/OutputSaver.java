@@ -42,6 +42,13 @@ public final class OutputSaver {
         MIME.put("csv", "text/csv");
         MIME.put("zip", "application/zip");
         MIME.put("epub", "application/epub+zip");
+        MIME.put("mp3", "audio/mpeg");
+        MIME.put("flac", "audio/flac");
+        MIME.put("ogg", "audio/ogg");
+        MIME.put("oga", "audio/ogg");
+        MIME.put("m4a", "audio/mp4");
+        MIME.put("aac", "audio/aac");
+        MIME.put("wav", "audio/wav");
     }
 
     private OutputSaver() {

@@ -57,6 +57,10 @@ public final class ConversionEngine {
                 return convertZip(ctx, uri, base);
             case "epub":
                 return convertEpub(ctx, uri, base);
+            case "music":
+                return convertMusic(ctx, uri, ext, base, targetId);
+            case "audio":
+                return convertAudio(ctx, uri, ext, base, targetId);
             default:
                 throw new Exception("暂不支持该文件类型 (. " + ext + ")");
         }
@@ -286,6 +290,90 @@ public final class ConversionEngine {
             outs.add(new Output(base + ".txt", text.getBytes(StandardCharsets.UTF_8)));
             return outs;
         }
+    }
+
+    // ---------- 加密音乐解锁 ----------
+    private static List<Output> convertMusic(Context ctx, Uri uri, String ext, String base, String targetId) throws Exception {
+        if (!"unlock".equals(targetId)) {
+            throw new Exception("不支持的目标: " + targetId);
+        }
+        byte[] raw;
+        try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new Exception("无法读取音乐文件");
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                bos.write(buf, 0, n);
+                if (bos.size() > 512 * 1024 * 1024) throw new Exception("文件过大（>512MB）");
+            }
+            raw = bos.toByteArray();
+        }
+        byte[] audio;
+        switch (ext) {
+            case "ncm":
+                audio = MusicDecryptor.decryptNcm(raw);
+                break;
+            case "kgm":
+            case "kgma":
+                audio = MusicDecryptor.decryptKgm(raw, false);
+                break;
+            case "vpr":
+                audio = MusicDecryptor.decryptKgm(raw, true);
+                break;
+            case "kwm":
+                audio = MusicDecryptor.decryptKwm(raw);
+                break;
+            default:
+                throw new Exception("不支持的音乐类型: ." + ext);
+        }
+        if (audio.length == 0) throw new Exception("解密结果为空，文件可能损坏");
+        String outExt = MusicDecryptor.sniffAudioExt(audio);
+        List<Output> outs = new ArrayList<>();
+        outs.add(new Output(base + "_解锁." + outExt, audio));
+        return outs;
+    }
+
+    // ---------- 普通音频互转（FFmpegKit） ----------
+    private static List<Output> convertAudio(Context ctx, Uri uri, String ext, String base, String targetId) throws Exception {
+        String outExt = targetId;
+        File inFile = new File(ctx.getCacheDir(), "ffmpeg_in_" + System.currentTimeMillis() + "." + ext);
+        File outFile = new File(ctx.getCacheDir(), "ffmpeg_out_" + System.currentTimeMillis() + "." + outExt);
+        try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new Exception("无法读取音频文件");
+            try (FileOutputStream fos = new FileOutputStream(inFile)) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) fos.write(buf, 0, n);
+            }
+        }
+        try {
+            String cmd = "-y -i " + quote(inFile.getAbsolutePath()) + " " + quote(outFile.getAbsolutePath());
+            com.arthenica.ffmpegkit.FFmpegSession session = com.arthenica.ffmpegkit.FFmpegKit.execute(cmd);
+            if (session == null || !com.arthenica.ffmpegkit.ReturnCode.isSuccess(session.getReturnCode())) {
+                throw new Exception("音频转码失败，请确认源文件未损坏");
+            }
+            if (!outFile.isFile() || outFile.length() == 0) throw new Exception("音频转码结果为空");
+            byte[] data = new byte[(int) Math.min(outFile.length(), Integer.MAX_VALUE)];
+            try (FileInputStream fis = new FileInputStream(outFile)) {
+                int off = 0;
+                while (off < data.length) {
+                    int r = fis.read(data, off, data.length - off);
+                    if (r < 0) break;
+                    off += r;
+                }
+            }
+            List<Output> outs = new ArrayList<>();
+            outs.add(new Output(base + "." + outExt, data));
+            return outs;
+        } finally {
+            inFile.delete();
+            outFile.delete();
+        }
+    }
+
+    private static String quote(String s) {
+        return "'" + s.replace("'", "'\\''") + "'";
     }
 
     // ---------- 工具 ----------

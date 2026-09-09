@@ -17,6 +17,8 @@ android {
     buildTypes {
         release {
             minifyEnabled false
+            // 个人分发：沿用 debug 签名，产出可直接安装的正式包
+            signingConfig signingConfigs.debug
         }
         debug {
             applicationIdSuffix ".debug"
@@ -32,4 +34,10 @@ android {
     lint {
         abortOnError false
     }
+}
+
+dependencies {
+    // FFmpegKit 已从 Maven Central 下架（原 com.arthenica 坐标失效），改本地 AAR：
+    // 阿里云/华为云镜像缓存 4.5.1 全 ABI（含 x86_64，可跑模拟器）；smart-exception-java 为其传递依赖，一并本地化
+    implementation files('libs/ffmpeg-kit-full-4.5.1.aar', 'libs/smart-exception-java-0.1.1.jar', 'libs/smart-exception-common-0.1.1.jar')
 }
