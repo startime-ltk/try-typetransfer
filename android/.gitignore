@@ -1,0 +1,12 @@
+# Gradle / Android Studio 生成物
+.gradle/
+build/
+local.properties
+*.apk
+*.aab
+captures/
+.externalNativeBuild/
+.cxx/
+.idea/
+*.iml
+.DS_Store
