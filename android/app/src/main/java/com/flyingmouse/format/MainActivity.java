@@ -73,6 +73,7 @@ public class MainActivity extends Activity {
         btnConvert = findViewById(R.id.btnConvert);
         Button btnPick = findViewById(R.id.btnPick);
         Button btnClear = findViewById(R.id.btnClear);
+        TextView btnFormats = findViewById(R.id.btnFormats);
 
         mascot.setImageResource(R.drawable.mouse_idle);
 
@@ -95,6 +96,11 @@ public class MainActivity extends Activity {
         });
 
         btnConvert.setOnClickListener(v -> startConvert());
+
+        btnFormats.setOnClickListener(v -> {
+            if (converting) return;
+            startActivity(new Intent(this, FormatsActivity.class));
+        });
 
         handleIncomingIntent(getIntent());
     }

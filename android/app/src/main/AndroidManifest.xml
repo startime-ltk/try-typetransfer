@@ -43,5 +43,9 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".FormatsActivity"
+            android:exported="false" />
     </application>
 </manifest>

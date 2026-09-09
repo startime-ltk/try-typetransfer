@@ -102,17 +102,36 @@
             android:textSize="14sp" />
     </LinearLayout>
 
-    <!-- 文件队列标题 -->
-    <TextView
-        android:id="@+id/queueTitle"
+    <!-- 文件队列标题 + 可转换格式入口 -->
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="队列 (0)"
-        android:textColor="@color/text_main"
-        android:textStyle="bold"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
         android:paddingStart="16dp"
+        android:paddingEnd="16dp"
         android:paddingTop="8dp"
-        android:paddingBottom="4dp" />
+        android:paddingBottom="4dp">
+
+        <TextView
+            android:id="@+id/queueTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="队列 (0)"
+            android:textColor="@color/text_main"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/btnFormats"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/formats_entry"
+            android:textColor="@color/primary"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:padding="4dp" />
+    </LinearLayout>
 
     <ListView
         android:id="@+id/listQueue"

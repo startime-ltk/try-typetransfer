@@ -66,6 +66,55 @@ public final class FormatKit {
         EXT_TARGETS.put("epub", targets(new Target("txt", "提取 TXT")));
     }
 
+    /** 汇总页分组：标题 + 若干行说明 */
+    public static final class SummaryGroup {
+        public final String title;
+        public final List<String> lines;
+
+        public SummaryGroup(String title, List<String> lines) {
+            this.title = title;
+            this.lines = lines;
+        }
+    }
+
+    /** 全量支持格式汇总（供"可转换格式"页展示），由格式表动态生成，避免手写漂移 */
+    public static List<SummaryGroup> summaries() {
+        List<SummaryGroup> groups = new ArrayList<>();
+
+        List<String> imgLines = new ArrayList<>();
+        imgLines.add(line("png"));
+        imgLines.add(line("jpg", "jpeg"));
+        imgLines.add(line("webp"));
+        imgLines.add(line("bmp"));
+        imgLines.add("多张图片 → 合并 PDF");
+        groups.add(new SummaryGroup("图片", imgLines));
+
+        groups.add(new SummaryGroup("PDF", Collections.singletonList(line("pdf"))));
+        groups.add(new SummaryGroup("文本", Arrays.asList(line("txt"), line("md", "markdown"), line("html", "htm"))));
+        groups.add(new SummaryGroup("数据", Arrays.asList(line("json"), line("xml"), line("csv"))));
+        groups.add(new SummaryGroup("压缩包", Collections.singletonList(line("zip"))));
+        groups.add(new SummaryGroup("电子书", Collections.singletonList(line("epub"))));
+        return groups;
+    }
+
+    /** 生成一行 ".xxx/.yyy → 目标 / 目标" 文本，目标取自首扩展名 */
+    private static String line(String... exts) {
+        StringBuilder src = new StringBuilder();
+        for (String e : exts) {
+            if (src.length() > 0) src.append('/');
+            src.append('.').append(e);
+        }
+        List<Target> ts = EXT_TARGETS.get(exts[0]);
+        StringBuilder tg = new StringBuilder();
+        if (ts != null) {
+            for (Target t : ts) {
+                if (tg.length() > 0) tg.append(" / ");
+                tg.append(t.label);
+            }
+        }
+        return src + " → " + tg;
+    }
+
     private static List<Target> targets(Target... t) {
         return Collections.unmodifiableList(Arrays.asList(t));
     }

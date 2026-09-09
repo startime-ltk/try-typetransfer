@@ -6,4 +6,7 @@
     <string name="clear">清空队列</string>
     <string name="empty_hint">点击下方按钮选择要转换的文件，支持图片 / PDF / 文本 / JSON / XML / CSV / ZIP 等</string>
     <string name="open_output">打开输出目录</string>
+    <string name="formats_entry">可转换格式 ›</string>
+    <string name="formats_title">可转换格式</string>
+    <string name="back">‹ 返回</string>
 </resources>
