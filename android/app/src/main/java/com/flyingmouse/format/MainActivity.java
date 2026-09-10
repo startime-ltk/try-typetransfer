@@ -501,7 +501,7 @@ public class MainActivity extends Activity {
                 case "text": catCn = "文本"; break;
                 case "data": catCn = "数据"; break;
                 case "zip": catCn = "压缩包"; break;
-                case "epub": catCn = "电子书"; break;
+                case "ebook": catCn = "电子书"; break;
                 case "music": catCn = "音乐"; break;
                 case "audio": catCn = "音频"; break;
                 default: catCn = cat;

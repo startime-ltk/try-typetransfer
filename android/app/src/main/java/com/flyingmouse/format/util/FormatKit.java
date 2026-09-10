@@ -27,7 +27,7 @@ public final class FormatKit {
     private static final Map<String, List<Target>> EXT_TARGETS = new LinkedHashMap<>();
 
     static {
-        List<String> images = Arrays.asList("png", "jpg", "jpeg", "webp", "bmp");
+        List<String> images = Arrays.asList("png", "jpg", "jpeg", "webp", "bmp", "avif", "heic", "heif", "ico", "tga");
         for (String e : images) {
             EXT_CATEGORY.put(e, "image");
         }
@@ -41,7 +41,12 @@ public final class FormatKit {
         EXT_CATEGORY.put("xml", "data");
         EXT_CATEGORY.put("csv", "data");
         EXT_CATEGORY.put("zip", "zip");
-        EXT_CATEGORY.put("epub", "epub");
+        EXT_CATEGORY.put("epub", "ebook");
+        EXT_CATEGORY.put("mobi", "ebook");
+        // Office（P4 可用子集，零依赖 zip+XML 提取）
+        EXT_CATEGORY.put("docx", "office");
+        EXT_CATEGORY.put("xlsx", "office");
+        EXT_CATEGORY.put("pptx", "office");
         // 加密音乐（解锁为目标）
         EXT_CATEGORY.put("ncm", "music");
         EXT_CATEGORY.put("kgm", "music");
@@ -58,14 +63,20 @@ public final class FormatKit {
         EXT_CATEGORY.put("opus", "audio");
         EXT_CATEGORY.put("wma", "audio");
 
-        // 图片
-        EXT_TARGETS.put("png", targets(new Target("jpg", "JPG"), new Target("webp", "WEBP"), new Target("bmp", "BMP"), new Target("pdf", "转 PDF")));
-        EXT_TARGETS.put("jpg", targets(new Target("png", "PNG"), new Target("webp", "WEBP"), new Target("bmp", "BMP"), new Target("pdf", "转 PDF")));
-        EXT_TARGETS.put("jpeg", targets(new Target("png", "PNG"), new Target("webp", "WEBP"), new Target("bmp", "BMP"), new Target("pdf", "转 PDF")));
-        EXT_TARGETS.put("webp", targets(new Target("png", "PNG"), new Target("jpg", "JPG"), new Target("bmp", "BMP"), new Target("pdf", "转 PDF")));
-        EXT_TARGETS.put("bmp", targets(new Target("png", "PNG"), new Target("jpg", "JPG"), new Target("webp", "WEBP"), new Target("pdf", "转 PDF")));
+        // 图片（P6 起统一追加 OCR 文本目标）
+        EXT_TARGETS.put("png", imgTargets(new Target("jpg", "JPG"), new Target("webp", "WEBP"), new Target("bmp", "BMP"), new Target("pdf", "转 PDF")));
+        EXT_TARGETS.put("jpg", imgTargets(new Target("png", "PNG"), new Target("webp", "WEBP"), new Target("bmp", "BMP"), new Target("pdf", "转 PDF")));
+        EXT_TARGETS.put("jpeg", imgTargets(new Target("png", "PNG"), new Target("webp", "WEBP"), new Target("bmp", "BMP"), new Target("pdf", "转 PDF")));
+        EXT_TARGETS.put("webp", imgTargets(new Target("png", "PNG"), new Target("jpg", "JPG"), new Target("bmp", "BMP"), new Target("pdf", "转 PDF")));
+        EXT_TARGETS.put("bmp", imgTargets(new Target("png", "PNG"), new Target("jpg", "JPG"), new Target("webp", "WEBP"), new Target("pdf", "转 PDF")));
+        // P3 图片扩展输入（avif/heic 由系统解码；ico/tga 纯 Java 解码）
+        EXT_TARGETS.put("avif", imgTargets(new Target("png", "PNG"), new Target("jpg", "JPG"), new Target("webp", "WEBP"), new Target("pdf", "转 PDF")));
+        EXT_TARGETS.put("heic", imgTargets(new Target("png", "PNG"), new Target("jpg", "JPG"), new Target("webp", "WEBP"), new Target("pdf", "转 PDF")));
+        EXT_TARGETS.put("heif", imgTargets(new Target("png", "PNG"), new Target("jpg", "JPG"), new Target("webp", "WEBP"), new Target("pdf", "转 PDF")));
+        EXT_TARGETS.put("ico", imgTargets(new Target("png", "PNG"), new Target("jpg", "JPG"), new Target("webp", "WEBP"), new Target("pdf", "转 PDF")));
+        EXT_TARGETS.put("tga", imgTargets(new Target("png", "PNG"), new Target("jpg", "JPG"), new Target("webp", "WEBP"), new Target("pdf", "转 PDF")));
         // PDF
-        EXT_TARGETS.put("pdf", targets(new Target("png", "PNG（逐页）"), new Target("jpg", "JPG（逐页）")));
+        EXT_TARGETS.put("pdf", targets(new Target("png", "PNG（逐页）"), new Target("jpg", "JPG（逐页）"), new Target("txt", "TXT 文本"), new Target("md", "MD 文本")));
         // 文本
         EXT_TARGETS.put("txt", targets(new Target("md", "Markdown"), new Target("html", "HTML"), new Target("epub", "EPUB")));
         EXT_TARGETS.put("md", targets(new Target("html", "HTML"), new Target("txt", "TXT"), new Target("epub", "EPUB")));
@@ -76,9 +87,14 @@ public final class FormatKit {
         EXT_TARGETS.put("json", targets(new Target("xml", "XML"), new Target("csv", "CSV"), new Target("json_pretty", "JSON 美化")));
         EXT_TARGETS.put("xml", targets(new Target("json", "JSON"), new Target("xml_pretty", "XML 美化")));
         EXT_TARGETS.put("csv", targets(new Target("json", "JSON"), new Target("md", "Markdown 表格"), new Target("html", "HTML 表格")));
-        // ZIP / EPUB
+        // ZIP / 电子书
         EXT_TARGETS.put("zip", targets(new Target("unzip", "解压 ZIP")));
-        EXT_TARGETS.put("epub", targets(new Target("txt", "提取 TXT")));
+        EXT_TARGETS.put("epub", targets(new Target("txt", "提取 TXT"), new Target("md", "转 Markdown")));
+        EXT_TARGETS.put("mobi", targets(new Target("txt", "提取 TXT"), new Target("md", "转 Markdown"), new Target("epub", "转 EPUB")));
+        // Office（P4）：docx/pptx → 文本类；xlsx → 表格类
+        EXT_TARGETS.put("docx", targets(new Target("txt", "提取 TXT"), new Target("md", "转 Markdown"), new Target("html", "转 HTML")));
+        EXT_TARGETS.put("pptx", targets(new Target("txt", "提取 TXT"), new Target("md", "转 Markdown"), new Target("html", "转 HTML")));
+        EXT_TARGETS.put("xlsx", targets(new Target("csv", "转 CSV"), new Target("md", "转 Markdown 表格"), new Target("html", "转 HTML 表格")));
         // 加密音乐 → 解锁原始音频容器
         EXT_TARGETS.put("ncm", targets(new Target("unlock", "解锁音频")));
         EXT_TARGETS.put("kgm", targets(new Target("unlock", "解锁音频")));
@@ -117,14 +133,19 @@ public final class FormatKit {
         imgLines.add(line("jpg", "jpeg"));
         imgLines.add(line("webp"));
         imgLines.add(line("bmp"));
+        imgLines.add(line("avif", "heic", "heif", "ico", "tga"));
         imgLines.add("多张图片 → 合并 PDF");
+        imgLines.add("图片 → OCR 提取 TXT / Markdown（离线识别中英文）");
         groups.add(new SummaryGroup("图片", imgLines));
 
         groups.add(new SummaryGroup("PDF", Collections.singletonList(line("pdf"))));
         groups.add(new SummaryGroup("文本", Arrays.asList(line("txt"), line("md", "markdown"), line("html", "htm"))));
         groups.add(new SummaryGroup("数据", Arrays.asList(line("json"), line("xml"), line("csv"))));
         groups.add(new SummaryGroup("压缩包", Collections.singletonList(line("zip"))));
-        groups.add(new SummaryGroup("电子书", Collections.singletonList(line("epub"))));
+        groups.add(new SummaryGroup("电子书",
+                Arrays.asList(line("epub"), line("mobi"))));
+        groups.add(new SummaryGroup("Office 文档",
+                Arrays.asList(line("docx"), line("xlsx"), line("pptx"))));
         groups.add(new SummaryGroup("音乐解锁",
                 Arrays.asList(line("ncm"), line("kgm", "kgma"), line("vpr"), line("kwm"))));
         groups.add(new SummaryGroup("音频互转",
@@ -152,6 +173,14 @@ public final class FormatKit {
 
     private static List<Target> targets(Target... t) {
         return Collections.unmodifiableList(Arrays.asList(t));
+    }
+
+    /** 图片目标 = 常规图像目标 + OCR 文本目标（P6）。 */
+    private static List<Target> imgTargets(Target... t) {
+        List<Target> list = new ArrayList<>(Arrays.asList(t));
+        list.add(new Target("txt", "OCR 提取 TXT"));
+        list.add(new Target("md", "OCR → Markdown"));
+        return Collections.unmodifiableList(list);
     }
 
     private FormatKit() {

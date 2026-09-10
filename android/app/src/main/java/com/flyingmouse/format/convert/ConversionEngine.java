@@ -55,8 +55,10 @@ public final class ConversionEngine {
                 return convertData(ctx, uri, ext, base, targetId);
             case "zip":
                 return convertZip(ctx, uri, base);
-            case "epub":
-                return convertEpub(ctx, uri, base);
+            case "ebook":
+                return convertEbook(ctx, uri, ext, base, targetId);
+            case "office":
+                return convertOffice(ctx, uri, ext, base, targetId);
             case "music":
                 return convertMusic(ctx, uri, ext, base, targetId);
             case "audio":
@@ -73,7 +75,7 @@ public final class ConversionEngine {
             for (Uri uri : uris) {
                 try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
                     if (in == null) throw new Exception("无法读取图片");
-                    Bitmap bmp = ImageTool.decode(in);
+                    Bitmap bmp = ImageTool.decodeByExt(in, FormatKit.extOf(names.get(pages.size())));
                     pages.add(bmp);
                 }
             }
@@ -90,7 +92,7 @@ public final class ConversionEngine {
         if ("pdf".equals(targetId)) {
             try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
                 if (in == null) throw new Exception("无法读取图片");
-                Bitmap bmp = ImageTool.decode(in);
+                Bitmap bmp = ImageTool.decodeByExt(in, ext);
                 List<Bitmap> one = new ArrayList<>(1);
                 one.add(bmp);
                 try {
@@ -103,10 +105,26 @@ public final class ConversionEngine {
                 }
             }
         }
+        // P6：图片 OCR → 文本
+        if ("txt".equals(targetId) || "md".equals(targetId)) {
+            try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
+                if (in == null) throw new Exception("无法读取图片");
+                Bitmap bmp = ImageTool.decodeByExt(in, ext);
+                try {
+                    String text = OcrEngine.recognize(bmp);
+                    if (text.trim().isEmpty()) throw new Exception("未识别到文字（OCR 结果为空）");
+                    List<Output> outs = new ArrayList<>();
+                    outs.add(new Output(base + "." + targetId, text.getBytes(StandardCharsets.UTF_8)));
+                    return outs;
+                } finally {
+                    bmp.recycle();
+                }
+            }
+        }
         String outExt = targetId;
         try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
             if (in == null) throw new Exception("无法读取图片");
-            Bitmap bmp = ImageTool.decode(in);
+            Bitmap bmp = ImageTool.decodeByExt(in, ext);
             try {
                 byte[] out = ImageTool.encodeToBytes(bmp, outExt);
                 List<Output> outs = new ArrayList<>();
@@ -118,8 +136,22 @@ public final class ConversionEngine {
         }
     }
 
-    // ---------- PDF → 逐页 PNG/JPG（打包 zip） ----------
+    // ---------- PDF → 逐页 PNG/JPG（打包 zip）/ 文本提取（txt、md） ----------
     private static List<Output> convertPdf(Context ctx, Uri uri, String base, String targetId) throws Exception {
+        if ("txt".equals(targetId) || "md".equals(targetId)) {
+            byte[] pdf;
+            try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
+                if (in == null) throw new Exception("无法读取 PDF");
+                pdf = readAllBytes(in);
+            }
+            String text = PdfTextExtractor.extractText(pdf);
+            if (text.isEmpty()) {
+                throw new Exception("该 PDF 未包含可提取的文本层（可能是扫描件，图片型 PDF 需 OCR 支持）");
+            }
+            List<Output> outs = new ArrayList<>();
+            outs.add(new Output(base + "." + targetId, text.getBytes(StandardCharsets.UTF_8)));
+            return outs;
+        }
         String outExt = targetId; // png / jpg
         File outDir = new File(ctx.getCacheDir(), "pdf_pages_" + System.currentTimeMillis());
         if (!outDir.mkdirs()) throw new Exception("无法创建临时目录");
@@ -281,15 +313,121 @@ public final class ConversionEngine {
         }
     }
 
-    private static List<Output> convertEpub(Context ctx, Uri uri, String base) throws Exception {
-        try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
-            if (in == null) throw new Exception("无法读取 EPUB");
-            String xhtml = EpubReader.extractFirstXhtml(in);
-            String text = TextTool.htmlToText(xhtml);
+    // ---------- 电子书（EPUB / MOBI） ----------
+    /** EPUB → txt/md（按 spine 逐章）；MOBI → txt/md/epub。对齐桌面版 convertEbook。 */
+    private static List<Output> convertEbook(Context ctx, Uri uri, String ext, String base, String targetId) throws Exception {
+        if (ext.equals("epub")) {
+            List<String> xhtmls;
+            try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
+                if (in == null) throw new Exception("无法读取 EPUB");
+                xhtmls = EpubReader.extractSpineXhtml(in);
+            }
+            StringBuilder merged = new StringBuilder();
+            for (String xhtml : xhtmls) {
+                String part;
+                if ("txt".equals(targetId)) part = TextTool.htmlToText(xhtml);
+                else if ("md".equals(targetId)) part = TextTool.htmlToMarkdown(xhtml);
+                else throw new Exception("不支持的目标: " + targetId);
+                if (part != null && !part.trim().isEmpty()) {
+                    if (merged.length() > 0) merged.append("\n\n");
+                    merged.append(part.trim());
+                }
+            }
+            if (merged.length() == 0) throw new Exception("EPUB 解析失败：未提取到任何内容。");
             List<Output> outs = new ArrayList<>();
-            outs.add(new Output(base + ".txt", text.getBytes(StandardCharsets.UTF_8)));
+            outs.add(new Output(base + "." + targetId, merged.toString().getBytes(StandardCharsets.UTF_8)));
             return outs;
         }
+        if (ext.equals("mobi")) {
+            byte[] raw;
+            try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
+                if (in == null) throw new Exception("无法读取 MOBI");
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    bos.write(buf, 0, n);
+                    if (bos.size() > 128 * 1024 * 1024) throw new Exception("文件过大（>128MB）");
+                }
+                raw = bos.toByteArray();
+            }
+            String html = MobiReader.parseMobiText(raw);
+            if ("txt".equals(targetId)) {
+                String text = TextTool.htmlToText(html);
+                if (text.trim().isEmpty()) throw new Exception("MOBI 解析失败：未提取到任何文本。");
+                List<Output> outs = new ArrayList<>();
+                outs.add(new Output(base + ".txt", text.getBytes(StandardCharsets.UTF_8)));
+                return outs;
+            }
+            if ("md".equals(targetId)) {
+                String markdown = TextTool.htmlToMarkdown(html);
+                if (markdown.trim().isEmpty()) throw new Exception("MOBI 解析失败：未提取到任何内容。");
+                List<Output> outs = new ArrayList<>();
+                outs.add(new Output(base + ".md", markdown.getBytes(StandardCharsets.UTF_8)));
+                return outs;
+            }
+            if ("epub".equals(targetId)) {
+                String text = TextTool.htmlToText(html);
+                if (text.trim().isEmpty()) throw new Exception("MOBI 解析失败：未提取到任何文本。");
+                byte[] epub = EpubTool.textToEpub(base, bodyForEpub("txt", text));
+                List<Output> outs = new ArrayList<>();
+                outs.add(new Output(base + ".epub", epub));
+                return outs;
+            }
+            throw new Exception("不支持的目标: " + targetId);
+        }
+        throw new Exception("不支持的电子书类型: ." + ext);
+    }
+
+    // ---------- Office 可用子集（P4） ----------
+    private static List<Output> convertOffice(Context ctx, Uri uri, String ext, String base, String targetId) throws Exception {
+        byte[] zip;
+        try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new Exception("无法读取文档");
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) {
+                bos.write(buf, 0, n);
+                if (bos.size() > 128 * 1024 * 1024) throw new Exception("文件过大（>128MB）");
+            }
+            zip = bos.toByteArray();
+        }
+        String outExt;
+        String out;
+        if (ext.equals("xlsx")) {
+            String csv = OfficeReader.xlsxToCsv(zip);
+            if ("csv".equals(targetId)) {
+                out = csv;
+                outExt = "csv";
+            } else if ("md".equals(targetId)) {
+                out = TextTool.csvToMarkdown(csv);
+                outExt = "md";
+            } else if ("html".equals(targetId)) {
+                out = TextTool.csvToHtmlTable(csv);
+                outExt = "html";
+            } else {
+                throw new Exception("不支持的目标: " + targetId);
+            }
+        } else {
+            String text = ext.equals("docx") ? OfficeReader.docxToText(zip) : OfficeReader.pptxToText(zip);
+            if (text.trim().isEmpty()) throw new Exception("文档解析失败：未提取到任何文本。");
+            if ("txt".equals(targetId)) {
+                out = text;
+                outExt = "txt";
+            } else if ("md".equals(targetId)) {
+                out = text;
+                outExt = "md";
+            } else if ("html".equals(targetId)) {
+                out = TextTool.txtToHtml(text);
+                outExt = "html";
+            } else {
+                throw new Exception("不支持的目标: " + targetId);
+            }
+        }
+        List<Output> outs = new ArrayList<>();
+        outs.add(new Output(base + "." + outExt, out.getBytes(StandardCharsets.UTF_8)));
+        return outs;
     }
 
     // ---------- 加密音乐解锁 ----------
@@ -392,6 +530,17 @@ public final class ConversionEngine {
             int off = bytes.length >= 3 && (bytes[0] & 0xFF) == 0xEF && (bytes[1] & 0xFF) == 0xBB && (bytes[2] & 0xFF) == 0xBF ? 3 : 0;
             return new String(bytes, off, bytes.length - off, StandardCharsets.UTF_8);
         }
+    }
+
+    private static byte[] readAllBytes(InputStream in) throws Exception {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) > 0) {
+            bos.write(buf, 0, n);
+            if (bos.size() > 64 * 1024 * 1024) throw new Exception("PDF 过大（>64MB）");
+        }
+        return bos.toByteArray();
     }
 
     private static byte[] zipDir(File dir) throws IOException {

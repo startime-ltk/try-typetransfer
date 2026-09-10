@@ -29,11 +29,14 @@ public final class EpubTool {
 
         ZipEntry mt = new ZipEntry("mimetype");
         mt.setMethod(ZipEntry.STORED);
-        mt.setSize(20);
-        mt.setCompressedSize(20);
-        mt.setCrc(0x2BACAF2F); // "application/epub+zip" 的 CRC32
+        byte[] mimeBytes = "application/epub+zip".getBytes(StandardCharsets.US_ASCII);
+        java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+        crc.update(mimeBytes);
+        mt.setSize(mimeBytes.length);
+        mt.setCompressedSize(mimeBytes.length);
+        mt.setCrc(crc.getValue()); // 用实际 CRC，避免 Android libcore 对 STORED 的 CRC 校验失败
         zip.putNextEntry(mt);
-        zip.write("application/epub+zip".getBytes(StandardCharsets.US_ASCII));
+        zip.write(mimeBytes);
         zip.closeEntry();
 
         writeEntry(zip, "META-INF/container.xml",

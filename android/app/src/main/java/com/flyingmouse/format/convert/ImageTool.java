@@ -23,6 +23,34 @@ public final class ImageTool {
         return bmp;
     }
 
+    /** 按扩展名解码；avif/heic 走系统解码，ico/tga 走纯 Java 解码器。 */
+    public static Bitmap decodeByExt(InputStream in, String ext) throws IOException {
+        String e = ext == null ? "" : ext.toLowerCase(java.util.Locale.ROOT);
+        switch (e) {
+            case "ico":
+                return IcoDecoder.decode(in);
+            case "tga":
+                return TgaDecoder.decode(in);
+            case "avif":
+            case "heic":
+            case "heif":
+                if (android.os.Build.VERSION.SDK_INT < 28) {
+                    throw new IOException("该系统版本不支持解码 ." + e + "（需 Android 9+）");
+                }
+                try {
+                    Bitmap b = decode(in);
+                    if (b != null) return b;
+                    throw new IOException("系统无法解码 ." + e + " 图片");
+                } catch (IOException ex) {
+                    throw ex;
+                } catch (Exception ex) {
+                    throw new IOException("系统无法解码 ." + e + " 图片：" + ex.getMessage(), ex);
+                }
+            default:
+                return decode(in);
+        }
+    }
+
     /** 按目标扩展名编码并写出；bmp 由内部编码器处理。 */
     public static void encode(Bitmap src, String targetExt, OutputStream out) throws IOException {
         switch (targetExt.toLowerCase()) {
