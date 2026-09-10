@@ -11,7 +11,7 @@
 | 图片 | JPG / JPEG / PNG / WebP / BMP / AVIF / HEIC / HEIF / ICO / TGA | PNG / JPG / WebP / BMP / PDF |
 | 图片 OCR | 同上任意图片 | TXT / Markdown（离线识别中英文） |
 | 图片（多选） | 任意多张图片 | 合并为一个 PDF |
-| PDF | PDF | PNG / JPG（逐页渲染）+ 打包 ZIP / TXT / MD 文本提取 |
+| PDF | PDF | PNG / JPG（逐页渲染）+ 打包 ZIP / TXT / MD（无文本层的扫描件自动逐页 OCR，最多 30 页） |
 | 文本 | TXT | HTML / Markdown / EPUB |
 | 文本 | Markdown | HTML / TXT / EPUB |
 | 文本 | HTML | TXT / Markdown |
@@ -36,10 +36,10 @@
 ## 技术要点
 
 - 纯 **Java + 原生 View** 实现，转换逻辑全部自研；仅 P6 图片 OCR 引入 ML Kit（`com.google.mlkit:text-recognition-chinese`，其 AndroidX 传递依赖要求 `android.useAndroidX=true`）；
-- 图片 OCR（P6）：ML Kit 内置 bundled 模型，**完全离线**识别中英文，输出 TXT / Markdown，无需联网与 Play 服务；bundled 模型使 APK 增至约 146MB（全 ABI 打包），可按需用 `abiFilters` 裁剪；
+- 图片 OCR（P6）：ML Kit 内置 bundled 模型，**完全离线**识别中英文，输出 TXT / Markdown，无需联网与 Play 服务；已用 `abiFilters` 仅保留 `arm64-v8a` / `x86_64`，APK 由 146.2MB 降至约 81.5MB；
 - 文件选择走 **SAF**（Storage Access Framework），无需存储权限即可读取；产物经 MediaStore 写入公共下载目录；
 - 图片解码/编码使用 `BitmapFactory`（BMP 24 位含手写编码器），PDF 渲染基于系统 `PdfRenderer`；
-- PDF→TXT/MD 为纯 Java 自研文本层提取（自解对象索引与 `FlateDecode`，支持 `ToUnicode` CMap 与 Identity-H 双字节中文），不依赖 Poppler；扫描件（图片型 PDF）无文本层时明确报错提示需 OCR；
+- PDF→TXT/MD 为纯 Java 自研文本层提取（自解对象索引与 `FlateDecode`，支持 `ToUnicode` CMap 与 Identity-H 双字节中文），不依赖 Poppler；扫描件（图片型 PDF）无文本层时（P6c）自动逐页 `PdfRenderer` 渲染 + ML Kit 离线 OCR 兜底（最多 30 页，页面长边超 1800px 先等比缩放以控耗时）；
 - JSON↔XML 由自研 `JsonXml` 实现（Android 内置 `org.json` 不含桌面版使用的 `org.json.XML`）；
 - EPUB3 生成器为极简实现（mimetype + container + OPF + XHTML）；
 - 沿用桌面版鼠鼠状态图作为 UI 形象。
@@ -63,7 +63,7 @@ android/
 │   ├── convert/
 │   │   ├── ConversionEngine.java  # 转换调度引擎
 │   │   ├── ImageTool.java         # 图片互转 / 多图合并 PDF
-│   │   ├── PdfTool.java           # PDF 逐页渲染 PNG/JPG
+│   │   ├── PdfTool.java           # PDF 逐页渲染 PNG/JPG + 扫描件 OCR 文本
 │   │   ├── PdfTextExtractor.java  # PDF 文本层提取（纯 Java：CMap/FlateDecode）
 │   │   ├── OcrEngine.java         # 图片 OCR（ML Kit 离线中英文识别）
 │   │   ├── TextTool.java          # TXT/Markdown/HTML 互转
@@ -79,7 +79,8 @@ android/
 
 ## 后续规划
 
-- 图片 OCR（P6）已落地：任意图片 → TXT / Markdown，ML Kit 离线中英文识别；
-- 扫描件 PDF 的 OCR 提取、PDF→xlsx/docx 智能结构、相机 RAW 等对齐桌面端能力，属后续阶段重点；
-- PDF 文本提取与 PDF 逐页渲染已落地（P7/P8），扫描件与 PDF 结构还原仍待 OCR 与结构化解析；
+- 图片 OCR（P6a）已落地：任意图片 → TXT / Markdown，ML Kit 离线中英文识别；
+- 扫描件 PDF OCR（P6c）已落地：无文本层的图片型 PDF 自动逐页渲染 + OCR，输出 TXT / Markdown（上限 30 页）；
+- PDF 文本提取（P8）与逐页渲染（P7）已落地，扫描件空隙已由 P6c 补齐；
+- PDF→xlsx/docx 智能结构还原、相机 RAW 等对齐桌面端能力，属后续阶段重点；
 - UI 将持续对齐桌面版鼠鼠主题与交互。

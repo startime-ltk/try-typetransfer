@@ -146,7 +146,14 @@ public final class ConversionEngine {
             }
             String text = PdfTextExtractor.extractText(pdf);
             if (text.isEmpty()) {
-                throw new Exception("该 PDF 未包含可提取的文本层（可能是扫描件，图片型 PDF 需 OCR 支持）");
+                // 扫描件兜底（P6c）：逐页渲染 + 离线 OCR（最多 30 页）
+                try (InputStream in2 = ctx.getContentResolver().openInputStream(uri)) {
+                    if (in2 == null) throw new Exception("无法读取 PDF");
+                    text = PdfTool.renderPdfToText(ctx, in2, 30);
+                }
+                if (text.isEmpty()) {
+                    throw new Exception("该 PDF 无文本层，OCR 也未识别到文字（可能是空白页或过模糊的扫描件）");
+                }
             }
             List<Output> outs = new ArrayList<>();
             outs.add(new Output(base + "." + targetId, text.getBytes(StandardCharsets.UTF_8)));

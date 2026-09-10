@@ -25,5 +25,9 @@
             android:name=".OcrSmokeActivity"
             android:exported="true"
             android:theme="@android:style/Theme.NoDisplay" />
+        <activity
+            android:name=".PdfOcrSmokeActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.NoDisplay" />
     </application>
 </manifest>

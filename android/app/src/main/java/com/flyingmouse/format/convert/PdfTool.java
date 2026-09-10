@@ -92,4 +92,58 @@ public final class PdfTool {
             tmp.delete();
         }
     }
+
+    /**
+     * PDF → 逐页渲染 + 离线 OCR，返回整份文本（扫描件兜底，P6c）。
+     * 用于无文本层的图片型 PDF；单页未识别到文字则跳过该页。
+     */
+    public static String renderPdfToText(Context ctx, InputStream in, int maxPages) throws Exception {
+        File tmp = File.createTempFile("pdf_ocr_", ".pdf", ctx.getCacheDir());
+        try {
+            try (FileOutputStream fos = new FileOutputStream(tmp)) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) fos.write(buf, 0, n);
+            }
+            try (ParcelFileDescriptor pfd = ParcelFileDescriptor.open(tmp, ParcelFileDescriptor.MODE_READ_ONLY);
+                 PdfRenderer renderer = new PdfRenderer(pfd)) {
+                int count = Math.min(renderer.getPageCount(), maxPages);
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < count; i++) {
+                    String pageText;
+                    try (PdfRenderer.Page page = renderer.openPage(i)) {
+                        int w = Math.max(page.getWidth(), 1);
+                        int h = Math.max(page.getHeight(), 1);
+                        Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                        bmp.eraseColor(0xFFFFFFFF);
+                        page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                        Bitmap scaled = scaleForOcr(bmp);
+                        try {
+                            pageText = OcrEngine.recognize(scaled);
+                        } finally {
+                            if (scaled != bmp) scaled.recycle();
+                            bmp.recycle();
+                        }
+                    }
+                    if (pageText == null || pageText.trim().isEmpty()) continue;
+                    if (count > 1) sb.append("--- 第 ").append(i + 1).append(" 页 ---\n");
+                    sb.append(pageText.trim()).append("\n\n");
+                }
+                return sb.toString().trim();
+            }
+        } finally {
+            tmp.delete();
+        }
+    }
+
+    /** OCR 前把过大的页面等比缩到长边 1800px，兼顾清晰度与识别耗时。 */
+    private static Bitmap scaleForOcr(Bitmap src) {
+        int maxSide = Math.max(src.getWidth(), src.getHeight());
+        if (maxSide <= 1800) return src;
+        float s = 1800f / maxSide;
+        int w = Math.max((int) (src.getWidth() * s), 1);
+        int h = Math.max((int) (src.getHeight() * s), 1);
+        Bitmap out = Bitmap.createScaledBitmap(src, w, h, true);
+        return out == null ? src : out;
+    }
 }
