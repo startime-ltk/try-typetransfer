@@ -25,4 +25,15 @@
         android:layout_height="wrap_content"
         android:textSize="12sp"
         android:textColor="@color/text_sub" />
+
+    <TextView
+        android:id="@+id/itemRemove"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="✕"
+        android:textSize="16sp"
+        android:textColor="@color/text_sub"
+        android:paddingStart="12dp"
+        android:paddingEnd="2dp"
+        android:contentDescription="从队列移除" />
 </LinearLayout>

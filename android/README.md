@@ -33,6 +33,19 @@
 
 也支持从系统文件管理器"用…打开"或"分享"直接送入本 App 转换。
 
+## 分享 / 另存 / 批量能力
+
+产物拿到手之后的三条出口链路（均在结果弹窗中操作），以及多文件批量转换的容错策略：
+
+| 能力 | 说明 |
+| ---- | ---- |
+| **分享全部产物** | 结果弹窗「分享全部」把本次全部产物（含多页 PDF 渲染出的多张图）一次性打包进 `ClipData`，逐条 `content://` Uri 附带读权限，可直接分享到微信 / QQ / 网盘等；单文件场景同样复用该入口 |
+| **系统分享接收** | 在相册 / 文件管理器里「分享」或「用其他应用打开」可直接把文件送入本 App 并自动入队；`ACTION_SEND` 与 `ACTION_SEND_MULTIPLE` 双分支互通读取 `EXTRA_STREAM` 与 `ClipData`，兼容不同厂商 ROM 的注入方式 |
+| **另存到指定目录** | 结果弹窗支持「另存为」，走 SAF（`ACTION_OPEN_DOCUMENT_TREE`）由用户任选目标目录，逐文件写入并保留原文件名 |
+| **批量转换 + 失败隔离** | 多选文件后逐文件独立转换，单个文件异常（损坏 / 不支持 / 解码失败）只标记该条失败并给出原因，不中断其余文件；结果弹窗逐条列出成功 / 失败状态 |
+| **进度与队列管理** | 转换过程显示进度与队列状态（等待 / 转换中 / 成功 / 失败），可对排队项单独移除；分享注入的文件在应用已打开时直接累计入队 |
+| **产物命名去重** | 同名产物自动追加序号，并先剥离已有序号再做去重，避免出现 `xxx (1) (1)` 层叠后缀；弹窗展示的一律是落盘真实文件名 |
+
 ## 技术要点
 
 - 纯 **Java + 原生 View** 实现，转换逻辑全部自研；仅 P6 图片 OCR 引入 ML Kit（`com.google.mlkit:text-recognition-chinese`，其 AndroidX 传递依赖要求 `android.useAndroidX=true`）；
@@ -42,7 +55,11 @@
 - PDF→TXT/MD 为纯 Java 自研文本层提取（自解对象索引与 `FlateDecode`，支持 `ToUnicode` CMap 与 Identity-H 双字节中文），不依赖 Poppler；扫描件（图片型 PDF）无文本层时（P6c）自动逐页 `PdfRenderer` 渲染 + ML Kit 离线 OCR 兜底（最多 30 页，页面长边超 1800px 先等比缩放以控耗时）；
 - JSON↔XML 由自研 `JsonXml` 实现（Android 内置 `org.json` 不含桌面版使用的 `org.json.XML`）；
 - EPUB3 生成器为极简实现（mimetype + container + OPF + XHTML）；
-- 沿用桌面版鼠鼠状态图作为 UI 形象。
+- 沿用桌面版鼠鼠状态图作为 UI 形象；
+- **产物出口统一走 `content://`**：API 29+ 由 MediaStore 直接返回 `content://`；API 26–28 产物为 `file://`，统一经 `FileProvider`（`authorities=${applicationId}.fileprovider`，白名单 `Download/FlyingMouseFormat/`）转换后再分享 / 打开，规避 `FileUriExposedException`（同时新增 `androidx.core:core` 依赖提供 `FileProvider` 与 `ClipData` 多 Uri 授权）；
+- **主界面 `launchMode="singleTop"`**：从相册 / 文件管理器「分享 / 用其他应用打开」进入时复用已有实例，接收到的文件累计入队而非重建界面；
+- **产物命名去重**由 `OutputSaver.uniqueName()` / `stripDedupSuffix()` 实现，落盘真名回传结果弹窗展示；
+- 批量转换逐文件 `try/catch` 失败隔离，单条失败不阻断整批。
 
 ## 构建
 

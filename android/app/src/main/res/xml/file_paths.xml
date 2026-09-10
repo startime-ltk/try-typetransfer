@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 可共享目录白名单。
+  OutputSaver 在 API 26-28 会把产物写到公共下载目录下的 FlyingMouseFormat/，
+  对应 Environment.getExternalStorageDirectory() = /storage/emulated/0，
+  因此这里只暴露 Download/FlyingMouseFormat/ 子目录。
+  API 29+ 走 MediaStore，本身即 content:// Uri，无需经过 FileProvider。
+-->
+<paths>
+    <external-path
+        name="fm_downloads"
+        path="Download/FlyingMouseFormat/" />
+</paths>
