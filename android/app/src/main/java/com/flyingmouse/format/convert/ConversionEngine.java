@@ -3,6 +3,7 @@ package com.flyingmouse.format.convert;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.net.Uri;
+import android.util.Log;
 
 import com.flyingmouse.format.util.FormatKit;
 
@@ -25,6 +26,9 @@ import java.util.zip.ZipOutputStream;
  * 纯本地、无网络，覆盖移动端能力子集。
  */
 public final class ConversionEngine {
+
+    /** 与 MainActivity 同名，便于 adb logcat -s FMFormat 一次性取全链路 */
+    private static final String TAG = "FMFormat";
 
     public static final class Output {
         public final String fileName;
@@ -68,23 +72,72 @@ public final class ConversionEngine {
         }
     }
 
-    /** 多张图片合并为一个 PDF。 */
-    public static Output imagesToPdf(Context ctx, List<Uri> uris, List<String> names, String baseName) throws Exception {
+    /**
+     * 多张图片合并 PDF 的结果明细。
+     * output 为 null 表示所有图片都不可用（没有任何可合并的页）。
+     * okIndexes / failedIndexes 与入参 uris 下标一一对应，failedReasons 与 failedIndexes 等长，
+     * 便于调用方按"哪一张失败、为什么失败"逐张标记队列状态，而不是把整批一刀切成失败。
+     */
+    public static final class MergeResult {
+        public final Output output;
+        public final List<Integer> okIndexes = new ArrayList<>();
+        public final List<Integer> failedIndexes = new ArrayList<>();
+        public final List<String> failedReasons = new ArrayList<>();
+
+        MergeResult(Output output) {
+            this.output = output;
+        }
+    }
+
+    /**
+     * 多张图片合并为一个 PDF（vc8 容错版）。
+     * 单张图片读取/解码失败只记录到 failedIndexes/failedReasons，不再把整批标记为失败：
+     * 其余可正常解码的图片照常合并产出 PDF，结果弹窗按成功/失败明细呈现。
+     */
+    public static MergeResult imagesToPdfTolerant(Context ctx, List<Uri> uris, List<String> names, String baseName)
+            throws Exception {
+        MergeResult mr = new MergeResult(null);
         List<Bitmap> pages = new ArrayList<>();
         try {
-            for (Uri uri : uris) {
-                try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
-                    if (in == null) throw new Exception("无法读取图片");
-                    Bitmap bmp = ImageTool.decodeByExt(in, FormatKit.extOf(names.get(pages.size())));
+            for (int i = 0; i < uris.size(); i++) {
+                String nm = (i < names.size() && names.get(i) != null) ? names.get(i) : ("第 " + (i + 1) + " 张");
+                try (InputStream in = ctx.getContentResolver().openInputStream(uris.get(i))) {
+                    if (in == null) throw new IOException("无法读取图片（输入流为空）");
+                    Bitmap bmp = ImageTool.decodeByExt(in, FormatKit.extOf(nm));
                     pages.add(bmp);
+                    mr.okIndexes.add(i);
+                    Log.i(TAG, "合并PDF 读图成功 [" + (i + 1) + "/" + uris.size() + "] " + nm);
+                } catch (Throwable t) {
+                    mr.failedIndexes.add(i);
+                    mr.failedReasons.add(nm + "：" + brief(t));
+                    Log.e(TAG, "合并PDF 读图失败 [" + (i + 1) + "/" + uris.size() + "] " + nm
+                            + " | " + t.getClass().getName() + ": " + t.getMessage(), t);
                 }
             }
-            if (pages.size() > 30) throw new Exception("一次最多合并 30 张图片");
+            if (pages.isEmpty()) {
+                Log.e(TAG, "合并PDF 中止：共 " + uris.size() + " 张图片，全部读取/解码失败");
+                return mr;
+            }
+            if (pages.size() > 30) {
+                throw new Exception("一次最多合并 30 张图片（可用 " + pages.size() + " 张）");
+            }
+            String fileName = baseName + "_合并" + pages.size() + "图.pdf";
             byte[] pdf = PdfTool.imagesToPdf(pages);
-            return new Output(baseName + ".pdf", pdf);
+            Log.i(TAG, "合并PDF 合成完成 " + fileName + " 页数=" + pages.size()
+                    + " 失败=" + mr.failedIndexes.size());
+            return new MergeResult(new Output(fileName, pdf));
         } finally {
             for (Bitmap b : pages) b.recycle();
         }
+    }
+
+    /** 异常信息压缩成一行，用于失败明细（与 MainActivity.briefMessage 口径一致）。 */
+    private static String brief(Throwable t) {
+        if (t == null) return "未知错误";
+        String m = t.getMessage();
+        if (m == null || m.trim().isEmpty()) m = t.getClass().getSimpleName();
+        m = m.replace('\n', ' ').replace('\r', ' ').trim();
+        return m.length() > 80 ? m.substring(0, 80) + "…" : m;
     }
 
     // ---------- 图片 ----------

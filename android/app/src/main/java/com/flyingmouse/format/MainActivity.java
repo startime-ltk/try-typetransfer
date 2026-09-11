@@ -403,9 +403,9 @@ public class MainActivity extends Activity {
             if (srcExtOfTargets != null && !srcExtOfTargets.equals(newExt)) {
                 // 混入不同类型：仅全图片可继续
                 if (allImages && "image".equals(FormatKit.categoryOf(newExt))) {
-                    // 图片混队列：目标按首文件的扩展名给
-                    targets.clear();
-                    targets.addAll(FormatKit.targetsOf(queue.get(0).ext));
+                    // 图片混队列：目标按首文件的扩展名给（vc8 修复④：此处必须同步 srcExtOfTargets，
+                    // 否则后续冲突检测会被整段跳过）
+                    applyImageTargets();
                     rebuildTargetChips();
                     return;
                 }
@@ -424,28 +424,34 @@ public class MainActivity extends Activity {
         }
 
         if (allImages) {
-            // 图片队列：若只选一个图片按自身目标；若多张额外提供合并 PDF
-            FormatKit.Target pdfT = new FormatKit.Target("pdf", "合并 PDF");
-            boolean hasPdf = false;
-            List<FormatKit.Target> baseTargets = FormatKit.targetsOf(queue.get(0).ext);
-            List<FormatKit.Target> list = new ArrayList<>(baseTargets);
-            if (list.size() == 1 && "pdf".equals(list.get(0).id)) hasPdf = true;
-            targets.clear();
-            if (queue.size() > 1) {
-                for (FormatKit.Target t : baseTargets) {
-                    if (!"pdf".equals(t.id)) targets.add(t);
-                }
-                targets.add(0, pdfT);
-            } else {
-                targets.addAll(baseTargets);
-            }
-            srcExtOfTargets = queue.get(0).ext;
+            applyImageTargets();
         } else {
             targets.clear();
             targets.addAll(FormatKit.targetsOf(queue.get(0).ext));
             srcExtOfTargets = queue.get(0).ext;
         }
         rebuildTargetChips();
+    }
+
+    /**
+     * 图片队列的目标候选（vc8 修复①）。
+     * 多张图片时：逐张转换的目标（来自首文件扩展名）排在前面，保证 rebuildTargetChips 自动
+     * 选中的第一项就是"逐张转换（默认 JPG）"；「合并 PDF」作为可选目标追加在末尾，不再自动选中。
+     * 单张图片时保持原有候选与顺序（含"转 PDF"）。
+     * 同时统一维护 srcExtOfTargets，避免调用方漏改导致后续冲突检测被跳过（vc8 修复④）。
+     */
+    private void applyImageTargets() {
+        List<FormatKit.Target> baseTargets = FormatKit.targetsOf(queue.get(0).ext);
+        targets.clear();
+        if (queue.size() > 1) {
+            for (FormatKit.Target t : baseTargets) {
+                if (!"pdf".equals(t.id)) targets.add(t);
+            }
+            targets.add(new FormatKit.Target("pdf", "合并 PDF"));
+        } else {
+            targets.addAll(baseTargets);
+        }
+        srcExtOfTargets = queue.get(0).ext;
     }
 
     private void rebuildTargetChips() {
@@ -535,6 +541,8 @@ public class MainActivity extends Activity {
             final List<String> names = new ArrayList<>();
             final List<String> failed = new ArrayList<>();
             final boolean[] cancelled = {false};
+            // 后台线程使用前先快照界面字段，避免转换途中被点击改变语义
+            final String target = selectedTargetId;
 
             // 多图片 → 合并 PDF：这是用户主动发起的一个整体任务，失败只记这一项
             boolean allImages = true;
@@ -545,60 +553,96 @@ public class MainActivity extends Activity {
                 }
             }
 
-            if (allImages && "pdf".equals(selectedTargetId) && batch.size() > 1) {
-                markItem(batch.get(0), ST_RUNNING, 1, batch.size(), batch.get(0).name);
-                String base = FormatKit.baseNameOf(batch.get(0).name) + "_合并" + batch.size() + "图";
-                try {
-                    List<Uri> uris = new ArrayList<>();
-                    List<String> display = new ArrayList<>();
-                    for (FileItem it : batch) {
-                        uris.add(it.uri);
-                        display.add(it.name);
-                    }
-                    ConversionEngine.Output out = ConversionEngine.imagesToPdf(this, uris, display, base);
-                    Uri savedUri = OutputSaver.save(this, out.data, out.fileName, "pdf");
-                    saved.add(savedUri);
-                    // 用磁盘上的真实文件名（重名时会被追加单层序号），保证弹窗/分享里显示的名字与实际一致
-                    names.add(OutputSaver.displayNameOf(this, savedUri, out.fileName));
-                    for (FileItem it : batch) it.state = ST_DONE;
-                } catch (Exception e) {
-                    for (FileItem it : batch) it.state = ST_FAILED;
-                    failed.add(base + ".pdf：" + briefMessage(e));
-                }
-                notifyQueue();
-            } else {
-                // 批量逐文件转换：单个文件异常只记录该项，继续处理队列中其余文件，不中断整批
-                for (int i = 0; i < batch.size(); i++) {
-                    if (cancelRequested) {
-                        cancelled[0] = true;
-                        for (int j = i; j < batch.size(); j++) batch.get(j).state = ST_CANCELLED;
-                        break;
-                    }
-                    FileItem it = batch.get(i);
-                    markItem(it, ST_RUNNING, i + 1, batch.size(), it.name);
+            try {
+                if (allImages && "pdf".equals(target) && batch.size() > 1) {
+                    // 合并 PDF 分支（vc8 修复②）：单张图片读取/解码失败只标记该张，其余图片照常合并产出
+                    Log.i(TAG, "startConvert 合并PDF分支：target=" + target + "，共 " + batch.size() + " 张图片");
+                    markItem(batch.get(0), ST_RUNNING, 1, batch.size(), batch.get(0).name);
+                    String base = FormatKit.baseNameOf(batch.get(0).name);
                     try {
-                        List<ConversionEngine.Output> outs =
-                                ConversionEngine.convert(this, it.uri, it.name, selectedTargetId);
-                        for (ConversionEngine.Output o : outs) {
-                            Uri savedUri = OutputSaver.save(this, o.data, o.fileName, FormatKit.extOf(o.fileName));
+                        List<Uri> uris = new ArrayList<>();
+                        List<String> display = new ArrayList<>();
+                        for (FileItem it : batch) {
+                            uris.add(it.uri);
+                            display.add(it.name);
+                        }
+                        ConversionEngine.MergeResult mr =
+                                ConversionEngine.imagesToPdfTolerant(this, uris, display, base);
+                        for (int k = 0; k < mr.failedIndexes.size(); k++) {
+                            int idx = mr.failedIndexes.get(k);
+                            if (idx >= 0 && idx < batch.size()) batch.get(idx).state = ST_FAILED;
+                            failed.add(mr.failedReasons.get(k));
+                        }
+                        for (int idx : mr.okIndexes) {
+                            if (idx >= 0 && idx < batch.size()) batch.get(idx).state = ST_DONE;
+                        }
+                        if (mr.output != null) {
+                            Uri savedUri = OutputSaver.save(this, mr.output.data, mr.output.fileName, "pdf");
                             saved.add(savedUri);
                             // 用磁盘上的真实文件名（重名时会被追加单层序号），保证弹窗/分享里显示的名字与实际一致
-                            names.add(OutputSaver.displayNameOf(this, savedUri, o.fileName));
+                            names.add(OutputSaver.displayNameOf(this, savedUri, mr.output.fileName));
+                            Log.i(TAG, "合并PDF 落盘：" + mr.output.fileName + " → " + savedUri);
+                        } else {
+                            Log.e(TAG, "合并PDF 无产出：可用图片为 0，失败明细=" + failed);
                         }
-                        it.state = ST_DONE;
-                    } catch (Exception e) {
-                        it.state = ST_FAILED;
-                        failed.add(it.name + "：" + briefMessage(e));
+                    } catch (Throwable e) {
+                        Log.e(TAG, "合并PDF 分支异常：" + e.getClass().getName() + ": " + e.getMessage(), e);
+                        for (FileItem it : batch) {
+                            if (it.state == ST_PENDING || it.state == ST_RUNNING) it.state = ST_FAILED;
+                        }
+                        failed.add(base + "_合并" + batch.size() + "图.pdf：" + briefMessage(e));
                     }
                     notifyQueue();
+                } else {
+                    // 批量逐文件转换：单个文件异常只记录该项，继续处理队列中其余文件，不中断整批
+                    Log.i(TAG, "startConvert 逐张分支：target=" + target + "，共 " + batch.size() + " 个文件");
+                    for (int i = 0; i < batch.size(); i++) {
+                        if (cancelRequested) {
+                            cancelled[0] = true;
+                            for (int j = i; j < batch.size(); j++) batch.get(j).state = ST_CANCELLED;
+                            break;
+                        }
+                        FileItem it = batch.get(i);
+                        markItem(it, ST_RUNNING, i + 1, batch.size(), it.name);
+                        Log.i(TAG, "逐张转换 [" + (i + 1) + "/" + batch.size() + "] 开始：" + it.name + " → " + target);
+                        try {
+                            List<ConversionEngine.Output> outs =
+                                    ConversionEngine.convert(this, it.uri, it.name, target);
+                            for (ConversionEngine.Output o : outs) {
+                                Uri savedUri = OutputSaver.save(this, o.data, o.fileName, FormatKit.extOf(o.fileName));
+                                saved.add(savedUri);
+                                // 用磁盘上的真实文件名（重名时会被追加单层序号），保证弹窗/分享里显示的名字与实际一致
+                                names.add(OutputSaver.displayNameOf(this, savedUri, o.fileName));
+                                Log.i(TAG, "逐张转换 [" + (i + 1) + "/" + batch.size() + "] 落盘："
+                                        + o.fileName + " → " + savedUri);
+                            }
+                            it.state = ST_DONE;
+                        } catch (Throwable e) {
+                            it.state = ST_FAILED;
+                            failed.add(it.name + "：" + briefMessage(e));
+                            Log.e(TAG, "逐张转换 [" + (i + 1) + "/" + batch.size() + "] 失败：" + it.name
+                                    + " | " + e.getClass().getName() + ": " + e.getMessage(), e);
+                        }
+                        notifyQueue();
+                    }
                 }
+            } catch (Throwable t) {
+                // vc8 修复⑤：Error/OOM 等非 Exception 也可能从链路中冒出，兜底保证不卡在"取消转换"
+                Log.e(TAG, "转换线程未捕获异常兜底：" + t.getClass().getName() + ": " + t.getMessage(), t);
+                failed.add("严重异常（" + t.getClass().getSimpleName() + "）：" + briefMessage(t));
+                for (FileItem it : batch) {
+                    if (it.state == ST_PENDING || it.state == ST_RUNNING) it.state = ST_FAILED;
+                }
+            } finally {
+                // 无论成功/失败/异常，UI 状态一定在此复位
+                int remaining = 0;
+                for (FileItem it : batch) if (it.state == ST_CANCELLED) remaining++;
+                Log.i(TAG, "转换线程结束：成功=" + names.size() + "，失败=" + failed.size()
+                        + "，取消=" + cancelled[0] + "，未处理=" + remaining);
+                notifyQueue();
+                // showConvertResult 内部自行切主线程，此处不再重复包一层
+                showConvertResult(saved, names, failed, cancelled[0], remaining);
             }
-
-            int remaining = 0;
-            for (FileItem it : batch) if (it.state == ST_CANCELLED) remaining++;
-            final int rest = remaining;
-            // showConvertResult 内部自行切主线程，此处不再重复包一层
-            showConvertResult(saved, names, failed, cancelled[0], rest);
         }).start();
     }
 
