@@ -334,7 +334,8 @@ public class MainActivity extends Activity {
         final String msg = "不支持的类型：" + label;
         Log.w(TAG, "拒绝入队 " + msg + " uri=" + uri + " name=" + name + " ext=\"" + ext + "\" mime=" + mime);
         toast(msg);
-        runOnUiThread(() -> setStatus(msg, R.drawable.mouse_idle));
+        // setStatus 内部自行切主线程，此处不再重复包一层
+        setStatus(msg, R.drawable.mouse_idle);
         return false;
     }
 
@@ -361,9 +362,12 @@ public class MainActivity extends Activity {
         return true;
     }
 
+    /** 刷新队列标题与列表（含重建 Adapter）；线程切换在方法内部完成，后台线程调用同样安全。 */
     private void refreshQueueUi() {
-        queueTitle.setText("队列 (" + queue.size() + ")");
-        listView.setAdapter(new FileAdapter());
+        runOnUiThread(() -> {
+            queueTitle.setText("队列 (" + queue.size() + ")");
+            listView.setAdapter(new FileAdapter());
+        });
     }
 
     /** 从队列中移除单个文件；转换进行中禁止操作，避免与批量任务抢队列。 */
@@ -384,7 +388,12 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** 目标格式候选刷新入口：线程切换在此完成，保证下面碰视图的逻辑只在主线程跑。 */
     private void refreshTargets(String newExt) {
+        runOnUiThread(() -> refreshTargetsOnMain(newExt));
+    }
+
+    private void refreshTargetsOnMain(String newExt) {
         // 新加入文件与旧文件格式冲突时重置目标候选
         Set<String> cats = new LinkedHashSet<>();
         for (FileItem it : queue) cats.add(FormatKit.categoryOf(it.ext));
@@ -588,7 +597,8 @@ public class MainActivity extends Activity {
             int remaining = 0;
             for (FileItem it : batch) if (it.state == ST_CANCELLED) remaining++;
             final int rest = remaining;
-            runOnUiThread(() -> showConvertResult(saved, names, failed, cancelled[0], rest));
+            // showConvertResult 内部自行切主线程，此处不再重复包一层
+            showConvertResult(saved, names, failed, cancelled[0], rest);
         }).start();
     }
 
@@ -602,15 +612,31 @@ public class MainActivity extends Activity {
         });
     }
 
+    /**
+     * 刷新队列列表。
+     * 转换/另存等耗时任务跑在后台线程，而 ListView.notifyDataSetChanged →
+     * AdapterView.onChanged → requestLayout 必须由创建视图层级的主线程执行，否则抛出
+     * CalledFromWrongThreadException（"Only the original thread that created a view hierarchy
+     * can touch its views"）导致应用闪退。因此把线程切换收敛在本方法内部：已在主线程则直接执行，
+     * 后台线程则 post 到主线程，调用方无需（也不应）各自再包一层。
+     */
     private void notifyQueue() {
-        if (listView.getAdapter() instanceof BaseAdapter) {
-            ((BaseAdapter) listView.getAdapter()).notifyDataSetChanged();
-        }
+        runOnUiThread(() -> {
+            if (listView.getAdapter() instanceof BaseAdapter) {
+                ((BaseAdapter) listView.getAdapter()).notifyDataSetChanged();
+            }
+        });
     }
 
     /** 汇总本次批量的成功 / 失败 / 取消结果，任一文件失败不影响其它文件。 */
     private void showConvertResult(List<Uri> saved, List<String> names, List<String> failed,
                                    boolean cancelled, int remaining) {
+        runOnUiThread(() -> showConvertResultOnMain(saved, names, failed, cancelled, remaining));
+    }
+
+    /** 结果汇总的实际实现（含弹窗与按钮状态复位），只允许在主线程执行。 */
+    private void showConvertResultOnMain(List<Uri> saved, List<String> names, List<String> failed,
+                                         boolean cancelled, int remaining) {
         converting = false;
         cancelRequested = false;
         btnConvert.setEnabled(true);
@@ -795,10 +821,9 @@ public class MainActivity extends Activity {
             for (int i = 0; i < srcs.size(); i++) {
                 final int index = i;
                 final String nm = i < names.size() ? names.get(i) : ("converted_" + (i + 1));
-                runOnUiThread(() -> {
-                    statusText.setText("正在另存 " + (index + 1) + "/" + srcs.size() + "：" + nm);
-                    mascot.setImageResource(R.drawable.mouse_converting);
-                });
+                // setStatus 内部自行切主线程，后台线程直接调用即可
+                setStatus("正在另存 " + (index + 1) + "/" + srcs.size() + "：" + nm,
+                        R.drawable.mouse_converting);
                 try {
                     String ext = FormatKit.extOf(nm);
                     Uri out = DocumentsContract.createDocument(getContentResolver(), tree,
@@ -863,13 +888,17 @@ public class MainActivity extends Activity {
         });
     }
 
+    /** 更新底部状态文案与吉祥物图标；线程切换在方法内部完成。 */
     private void setStatus(String text, int res) {
-        statusText.setText(text);
-        mascot.setImageResource(res);
+        runOnUiThread(() -> {
+            statusText.setText(text);
+            mascot.setImageResource(res);
+        });
     }
 
+    /** 弹 Toast；后台线程调用时 post 到主线程，避免无 Looper 的线程直接弹 Toast 抛异常。 */
     private void toast(String s) {
-        Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
+        runOnUiThread(() -> Toast.makeText(this, s, Toast.LENGTH_SHORT).show());
     }
 
     private int dp(int v) {
