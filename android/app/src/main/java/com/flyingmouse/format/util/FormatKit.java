@@ -25,6 +25,8 @@ public final class FormatKit {
 
     private static final Map<String, String> EXT_CATEGORY = new LinkedHashMap<>();
     private static final Map<String, List<Target>> EXT_TARGETS = new LinkedHashMap<>();
+    /** MIME → 扩展名映射（外部 Uri 无文件名可用时按 MIME 推断类型） */
+    private static final Map<String, String> MIME_EXT = new LinkedHashMap<>();
 
     static {
         List<String> images = Arrays.asList("png", "jpg", "jpeg", "webp", "bmp", "avif", "heic", "heif", "ico", "tga");
@@ -111,6 +113,47 @@ public final class FormatKit {
             }
             EXT_TARGETS.put(audios[i], Collections.unmodifiableList(list));
         }
+
+        // MIME → 扩展名（外部 Uri 拿不到文件名/扩展名时的兜底依据，见 extOfMime）
+        MIME_EXT.put("image/jpeg", "jpg");
+        MIME_EXT.put("image/jpg", "jpg");
+        MIME_EXT.put("image/png", "png");
+        MIME_EXT.put("image/webp", "webp");
+        MIME_EXT.put("image/bmp", "bmp");
+        MIME_EXT.put("image/x-ms-bmp", "bmp");
+        MIME_EXT.put("image/avif", "avif");
+        MIME_EXT.put("image/heic", "heic");
+        MIME_EXT.put("image/heif", "heif");
+        MIME_EXT.put("image/x-icon", "ico");
+        MIME_EXT.put("image/vnd.microsoft.icon", "ico");
+        MIME_EXT.put("image/x-tga", "tga");
+        MIME_EXT.put("application/pdf", "pdf");
+        MIME_EXT.put("text/plain", "txt");
+        MIME_EXT.put("text/markdown", "md");
+        MIME_EXT.put("text/x-markdown", "md");
+        MIME_EXT.put("text/html", "html");
+        MIME_EXT.put("text/xml", "xml");
+        MIME_EXT.put("text/csv", "csv");
+        MIME_EXT.put("application/json", "json");
+        MIME_EXT.put("application/xml", "xml");
+        MIME_EXT.put("application/zip", "zip");
+        MIME_EXT.put("application/x-zip-compressed", "zip");
+        MIME_EXT.put("application/epub+zip", "epub");
+        MIME_EXT.put("application/x-mobipocket-ebook", "mobi");
+        MIME_EXT.put("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx");
+        MIME_EXT.put("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx");
+        MIME_EXT.put("application/vnd.openxmlformats-officedocument.presentationml.presentation", "pptx");
+        MIME_EXT.put("audio/mpeg", "mp3");
+        MIME_EXT.put("audio/mp4", "m4a");
+        MIME_EXT.put("audio/x-m4a", "m4a");
+        MIME_EXT.put("audio/wav", "wav");
+        MIME_EXT.put("audio/x-wav", "wav");
+        MIME_EXT.put("audio/flac", "flac");
+        MIME_EXT.put("audio/x-flac", "flac");
+        MIME_EXT.put("audio/aac", "aac");
+        MIME_EXT.put("audio/ogg", "ogg");
+        MIME_EXT.put("audio/opus", "opus");
+        MIME_EXT.put("audio/x-ms-wma", "wma");
     }
 
     /** 汇总页分组：标题 + 若干行说明 */
@@ -197,6 +240,30 @@ public final class FormatKit {
 
     public static boolean isSupportedExt(String ext) {
         return EXT_TARGETS.containsKey(ext.toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * 由 MIME 推断扩展名（不含点，小写）；推断不出返回空串。
+     * 优先查映射表，其次按下级子类型猜（如 image/webp → webp、application/epub+zip → epub），
+     * 结果仅在 {@link #isSupportedExt(String)} 认可时才有意义。
+     */
+    public static String extOfMime(String mime) {
+        if (mime == null) return "";
+        String m = mime.trim().toLowerCase(Locale.ROOT);
+        int semi = m.indexOf(';');
+        if (semi >= 0) m = m.substring(0, semi).trim();
+        if (m.isEmpty() || "*".equals(m)) return "";
+        String mapped = MIME_EXT.get(m);
+        if (mapped != null) return mapped;
+        int slash = m.indexOf('/');
+        if (slash < 0 || slash == m.length() - 1) return "";
+        String sub = m.substring(slash + 1);
+        int plus = sub.indexOf('+');
+        if (plus > 0) sub = sub.substring(0, plus);
+        if (sub.startsWith("x-")) sub = sub.substring(2);
+        if (isSupportedExt(sub)) return sub;
+        if ("jpeg".equals(sub)) return "jpg";
+        return "";
     }
 
     public static String categoryOf(String ext) {

@@ -14,6 +14,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.Settings;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -43,6 +44,9 @@ import java.util.Set;
  * 兼容外部"用…打开"与分享接收。
  */
 public class MainActivity extends Activity {
+
+    /** 外部 Uri 类型解析/入队过程的日志标签（便于 adb logcat 取证） */
+    private static final String TAG = "FMFormat";
 
     private static final int REQ_PICK = 1001;
     private static final int REQ_PERM = 1002;
@@ -130,18 +134,22 @@ public class MainActivity extends Activity {
     private void handleIncomingIntent(Intent intent) {
         if (intent == null) return;
         String action = intent.getAction();
+        Log.i(TAG, "incoming action=" + action + " data=" + intent.getData() + " type=" + intent.getType()
+                + " clipCount=" + (intent.getClipData() == null ? 0 : intent.getClipData().getItemCount()));
         if (Intent.ACTION_VIEW.equals(action)) {
-            if (intent.getData() != null) {
-                addUri(intent.getData(), queryName(intent.getData()));
-                toast("已接收文件：可继续选择或直接转换");
-            }
+            // 「用…打开」：常规数据位是 getData()；个别来源只塞 ClipData，此处回退读 ClipData，
+            // 并把 Uri 列表交给与 SEND 分支相同的入队入口 receivedUris()，保证两条路径行为一致
+            List<Uri> uris = new ArrayList<>();
+            if (intent.getData() != null) uris.add(intent.getData());
+            addClipDataUris(intent, uris);
+            receivedUris(uris, intent.getType());
         } else if (Intent.ACTION_SEND.equals(action)) {
             // 常规数据位是 EXTRA_STREAM；部分发送方只塞 ClipData，此时回退读 ClipData
             List<Uri> uris = new ArrayList<>();
             Uri single = streamUri(intent);
             if (single != null) uris.add(single);
             addClipDataUris(intent, uris);
-            receivedUris(uris);
+            receivedUris(uris, intent.getType());
         } else if (Intent.ACTION_SEND_MULTIPLE.equals(action)) {
             // 常规数据位是 ClipData；部分发送方只塞 EXTRA_STREAM(ArrayList)，此时回退读 EXTRA_STREAM
             List<Uri> uris = new ArrayList<>();
@@ -149,20 +157,24 @@ public class MainActivity extends Activity {
             for (Uri u : streamUriList(intent)) {
                 if (u != null && !uris.contains(u)) uris.add(u);
             }
-            receivedUris(uris);
+            receivedUris(uris, intent.getType());
+        } else {
+            Log.i(TAG, "忽略的非接收型 action=" + action);
         }
     }
 
-    /** 把外部分享进来的 Uri 依次入队；addUri 内部已对不支持的类型/重复项给出提示 */
-    private void receivedUris(List<Uri> uris) {
+    /** 把外部（分享/用…打开）进来的 Uri 依次入队；内部已对不支持的类型/重复项给出提示 */
+    private void receivedUris(List<Uri> uris, String typeHint) {
         if (uris.isEmpty()) {
+            Log.w(TAG, "接收型 intent 未携带任何 Uri，type=" + typeHint);
             toast("未接收到文件，请在应用内选择文件");
             return;
         }
         int added = 0;
         for (Uri u : uris) {
-            if (addUri(u, queryName(u))) added++;
+            if (addIncomingUri(u, typeHint)) added++;
         }
+        Log.i(TAG, "外部 Uri 处理完毕 收到=" + uris.size() + " 入队=" + added);
         if (added > 1) {
             toast("已接收 " + added + " 个文件");
         } else if (added == 1) {
@@ -210,21 +222,20 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQ_PICK && resultCode == RESULT_OK && data != null) {
             int added = 0;
+            String typeHint = data.getType();
             if (data.getClipData() != null) {
                 ClipData cd = data.getClipData();
                 for (int i = 0; i < cd.getItemCount(); i++) {
                     Uri u = cd.getItemAt(i).getUri();
-                    if (u != null) {
-                        addUri(u, queryName(u));
-                        added++;
-                    }
+                    if (addIncomingUri(u, typeHint)) added++;
                 }
             } else if (data.getData() != null) {
-                addUri(data.getData(), queryName(data.getData()));
-                added = 1;
+                if (addIncomingUri(data.getData(), typeHint)) added = 1;
             }
-            if (added > 0) toast("已添加 " + added + " 个文件");
-            setMascot(R.drawable.mouse_idle, queue.isEmpty() ? getString(R.string.empty_hint) : "选择完毕，挑一个目标格式吧");
+            if (added > 0) {
+                toast("已添加 " + added + " 个文件");
+                setMascot(R.drawable.mouse_idle, queue.isEmpty() ? getString(R.string.empty_hint) : "选择完毕，挑一个目标格式吧");
+            }
         } else if (requestCode == REQ_PICK && resultCode == RESULT_CANCELED) {
             if (queue.isEmpty()) setMascot(R.drawable.mouse_idle, getString(R.string.empty_hint));
         } else if (requestCode == REQ_SAVE_DIR) {
@@ -245,6 +256,10 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * 取显示名：优先 OpenableColumns.DISPLAY_NAME；查不到（无读权限 / 提供方不支持）时退化为
+     * Uri 末段路径，仍取不到则用 "file"。退化情形会写日志，便于定位"文件名变成纯数字"的问题。
+     */
     private String queryName(Uri uri) {
         String name = null;
         try {
@@ -254,22 +269,88 @@ public class MainActivity extends Activity {
                 if (c.moveToFirst()) name = c.getString(0);
                 c.close();
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            // 常见于未持有对应媒体读权限，或调用方未把该 Uri 的读权限转授给本应用
+            Log.w(TAG, "DISPLAY_NAME 查询失败，退化为末段路径 uri=" + uri + " err=" + e);
         }
-        if (name == null) name = uri.getLastPathSegment();
-        if (name == null) name = "file";
+        if (name == null || name.trim().isEmpty()) {
+            name = uri.getLastPathSegment();
+            Log.w(TAG, "DISPLAY_NAME 为空，使用末段路径 name=" + name + " uri=" + uri);
+        }
+        if (name == null || name.trim().isEmpty()) name = "file";
         return name;
     }
 
-    /** 入队单个文件；返回是否真正加入（类型不支持或已在队列中返回 false） */
-    private boolean addUri(Uri uri, String name) {
+    /**
+     * 外部 Uri 入队统一入口：先按文件名的扩展名判类型；扩展名不可用（典型如 content:// 名称退化成
+     * 纯数字 "468"，扩展名为空）时，改用 Intent 的 type 或 ContentResolver 的 MIME 推断扩展名并合成
+     * 显示名，避免被误判为「不支持的类型」而静默丢弃。
+     */
+    private boolean addIncomingUri(Uri uri, String typeHint) {
+        if (uri == null) return false;
+        String name = queryName(uri);
         String ext = FormatKit.extOf(name);
+        String from = "文件名";
         if (!FormatKit.isSupportedExt(ext)) {
-            toast("不支持的类型：" + (ext.isEmpty() ? "未知" : "." + ext));
-            return false;
+            String mime = (typeHint == null || typeHint.trim().isEmpty()) ? typeOf(uri) : typeHint;
+            String mimeExt = FormatKit.extOfMime(mime);
+            Log.i(TAG, "扩展名不可用，尝试 MIME 兜底 uri=" + uri + " name=" + name + " ext=\"" + ext
+                    + "\" typeHint=" + typeHint + " type=" + mime + " mimeExt=" + mimeExt);
+            if (mimeExt.isEmpty() || !FormatKit.isSupportedExt(mimeExt)) {
+                return reject(uri, name, ext, mime);
+            }
+            name = synthesizeName(name, mimeExt);
+            ext = mimeExt;
+            from = "MIME:" + mime;
+        }
+        Log.i(TAG, "入队 uri=" + uri + " name=" + name + " ext=" + ext + " 类型来源=" + from);
+        return addUri(uri, name, ext);
+    }
+
+    /** ContentResolver 侧的 MIME；查询异常按"取不到"处理 */
+    private String typeOf(Uri uri) {
+        try {
+            return getContentResolver().getType(uri);
+        } catch (Exception e) {
+            Log.w(TAG, "ContentResolver.getType 失败 uri=" + uri + " err=" + e);
+            return null;
+        }
+    }
+
+    /** MIME 兜底时合成显示名：纯数字名（如 "468"）补 media_ 前缀，避免出现无扩展名/无意义的条目 */
+    private static String synthesizeName(String rawName, String ext) {
+        String base = FormatKit.baseNameOf(rawName);
+        if (base.matches("\\d+")) base = "media_" + base;
+        return base + "." + ext;
+    }
+
+    /**
+     * 拒绝入队：Toast + 日志 + 状态栏文案。
+     * 状态栏文案是给界面取证工具（uiautomator dump 抓不到 Toast）留的可读证据。
+     */
+    private boolean reject(Uri uri, String name, String ext, String mime) {
+        String label = (ext != null && !ext.isEmpty()) ? "." + ext
+                : ((mime == null || mime.trim().isEmpty()) ? "未知" : mime);
+        final String msg = "不支持的类型：" + label;
+        Log.w(TAG, "拒绝入队 " + msg + " uri=" + uri + " name=" + name + " ext=\"" + ext + "\" mime=" + mime);
+        toast(msg);
+        runOnUiThread(() -> setStatus(msg, R.drawable.mouse_idle));
+        return false;
+    }
+
+    /** 入队单个文件（应用内选择路径）；返回是否真正加入 */
+    private boolean addUri(Uri uri, String name) {
+        return addUri(uri, name, FormatKit.extOf(name));
+    }
+
+    /** 入队单个文件（统一入口）；类型不支持或已在队列中返回 false */
+    private boolean addUri(Uri uri, String name, String ext) {
+        if (!FormatKit.isSupportedExt(ext)) {
+            return reject(uri, name, ext, null);
         }
         for (FileItem it : queue) {
             if (it.uri.equals(uri)) {
+                Log.i(TAG, "跳过重复项 uri=" + uri);
                 toast("文件已在队列中");
                 return false;
             }

@@ -1,6 +1,7 @@
 # Gradle / Android Studio 生成物
 .gradle/
 build/
+build_*.log
 local.properties
 *.apk
 *.aab

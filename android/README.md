@@ -58,6 +58,8 @@
 - 沿用桌面版鼠鼠状态图作为 UI 形象；
 - **产物出口统一走 `content://`**：API 29+ 由 MediaStore 直接返回 `content://`；API 26–28 产物为 `file://`，统一经 `FileProvider`（`authorities=${applicationId}.fileprovider`，白名单 `Download/FlyingMouseFormat/`）转换后再分享 / 打开，规避 `FileUriExposedException`（同时新增 `androidx.core:core` 依赖提供 `FileProvider` 与 `ClipData` 多 Uri 授权）；
 - **主界面 `launchMode="singleTop"`**：从相册 / 文件管理器「分享 / 用其他应用打开」进入时复用已有实例，接收到的文件累计入队而非重建界面；
+- **外部 Uri 的类型判定为"扩展名 + MIME"双通道**：先按显示名的扩展名；取不到（`content://` 媒体 Uri 无 `DISPLAY_NAME` 读权限时名称会退化成纯数字，如 `468`）则改用 Intent `type` 或 `ContentResolver.getType(uri)` 的 MIME，经 `FormatKit.extOfMime()` 映射为扩展名并据此合成显示名（`media_468.png`），避免误判"不支持的类型"而静默丢弃；`ACTION_VIEW` 与 `ACTION_SEND` / `ACTION_SEND_MULTIPLE` 三个分支统一走 `receivedUris()` → `addIncomingUri()` 入队入口，且各自都做了 `ClipData` / `EXTRA_STREAM` 双向回退。全程未新增存储类权限（MIME 来自 Intent 与 ContentResolver，不需要媒体读权限即可判定类型）；
+- 类型解析与拒绝分支均带日志（TAG `FMFormat`），拒绝时除 Toast 外同步更新状态栏文案，便于 `adb logcat` 与 `uiautomator dump` 取证（Toast 抓不到，状态栏文案可以）；
 - **产物命名去重**由 `OutputSaver.uniqueName()` / `stripDedupSuffix()` 实现，落盘真名回传结果弹窗展示；
 - 批量转换逐文件 `try/catch` 失败隔离，单条失败不阻断整批。
 
@@ -93,6 +95,11 @@ android/
 │   └── util/OutputSaver.java      # MediaStore 输出保存
 └── app/src/main/res/              # 布局 / 鼠鼠状态图 / 图标
 ```
+
+## 变更记录
+
+- **v1.0.4（versionCode 6）** — 外部 Uri 类型解析加固：入队前引入"扩展名 + MIME"双通道（Intent `type` / `ContentResolver.getType()` 经 `FormatKit.extOfMime()` 映射扩展名），修复 `content://` 媒体 Uri 名称退化为纯数字时被判"不支持的类型"而静默丢弃；名称兜底按 MIME 合成显示名（`media_468.png`）；`ACTION_VIEW` 补 `ClipData` 回退并与 `SEND` 分支统一入队入口；拒绝/异常补日志与状态栏文案，便于界面取证；未新增存储权限。
+- **v1.0.3（versionCode 5）** — 修复 Android 8/9 分享失败（`FileProvider`）与批量转换中断（失败隔离）；补齐「分享全部」、SAF「另存为」、进度队列、产物命名去重；主界面改 `launchMode="singleTop"`。
 
 ## 后续规划
 
