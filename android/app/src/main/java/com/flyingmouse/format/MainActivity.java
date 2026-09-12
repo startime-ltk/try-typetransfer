@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
@@ -50,7 +51,18 @@ public class MainActivity extends Activity {
 
     private static final int REQ_PICK = 1001;
     private static final int REQ_PERM = 1002;
+    /** 多文件另存：ACTION_OPEN_DOCUMENT_TREE 一次授权一个目录 */
     private static final int REQ_SAVE_DIR = 1003;
+    /** 单文件另存：ACTION_CREATE_DOCUMENT 逐个选目标文件名/位置（不受目录授权限制） */
+    private static final int REQ_SAVE_ONE = 1004;
+
+    /** 待另存清单的持久化，避免 Activity 被系统回收后静默丢失 */
+    private static final String SAVE_PREF = "fm_save_pending";
+    private static final String KEY_URIS = "uris";
+    private static final String KEY_NAMES = "names";
+    private static final String KEY_TREE_TRIED = "tree_tried";
+    private static final String KEY_OK = "ok_names";
+    private static final String KEY_FAILED = "failed";
 
     /** 队列条目的转换状态 */
     private static final int ST_PENDING = 0;
@@ -75,9 +87,16 @@ public class MainActivity extends Activity {
     private boolean converting;
     /** 批量转换的取消请求标志（当前文件处理完后生效） */
     private volatile boolean cancelRequested;
-    /** 待另存到用户所选目录的产物（点击另存为后暂存，目录选择返回时消费） */
+    /** 待另存到用户所选位置的产物（点击另存为后暂存，选择器返回时消费） */
     private List<Uri> pendingSaveUris;
     private List<String> pendingSaveNames;
+    /** 另存流程是否进行中 */
+    private boolean saveFlowActive;
+    /** 是否已尝试过"目录授权"（多文件首次尝试；失败后降级为逐张另存） */
+    private boolean treeTried;
+    /** 本轮另存的成功清单与失败清单（用于结束汇总） */
+    private List<String> saveOkNames;
+    private List<String> saveFailed;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -239,19 +258,44 @@ public class MainActivity extends Activity {
         } else if (requestCode == REQ_PICK && resultCode == RESULT_CANCELED) {
             if (queue.isEmpty()) setMascot(R.drawable.mouse_idle, getString(R.string.empty_hint));
         } else if (requestCode == REQ_SAVE_DIR) {
+            // 目录授权结果：已授权 → 逐个写入该目录；未授权 → 明确提示并降级为逐张另存
+            loadSavePendingIfNeeded();
             if (resultCode == RESULT_OK && data != null && data.getData() != null) {
                 Uri tree = data.getData();
+                boolean persisted = false;
                 try {
                     getContentResolver().takePersistableUriPermission(tree,
                             Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-                } catch (Exception ignored) {
-                    // 个别文件提供方不支持持久化授权，本次写入仍可继续
+                    persisted = true;
+                } catch (Exception e) {
+                    // 个别文件提供方不支持持久化授权，本次写入仍可继续，但必须留痕
+                    Log.w(TAG, "另存为 目录授权已获得但持久化失败（本次仍尝试写入）：tree=" + tree
+                            + " errType=" + e.getClass().getSimpleName() + " errMsg=" + e.getMessage());
                 }
-                saveToTree(tree);
+                Log.i(TAG, "另存为 目录授权结果=成功 tree=" + tree + " 持久化=" + (persisted ? "是" : "否")
+                        + " flags=0x" + Integer.toHexString(data.getFlags()));
+                saveToTree(tree, persisted);
             } else {
-                pendingSaveUris = null;
-                pendingSaveNames = null;
+                Log.w(TAG, "另存为 未获得目录授权：resultCode=" + resultCode
+                        + " data=" + (data == null ? "null" : String.valueOf(data.getData()))
+                        + "；targetSdk>=30 时系统禁止授权 Download 根目录/存储根目录"
+                        + "（DocumentsUI 显示 Can't use this folder 且 USE THIS FOLDER 置灰），降级为逐张另存");
+                toast("该目录无法授权（系统隐私限制），改为逐个另存");
+                nextSaveStep();
+            }
+        } else if (requestCode == REQ_SAVE_ONE) {
+            // 单文件另存结果：OK → 把源产物字节写入用户新建的目标文档
+            loadSavePendingIfNeeded();
+            if (!saveFlowActive || pendingSaveUris == null || pendingSaveUris.isEmpty()) {
+                Log.w(TAG, "另存为 收到单文件另存结果但待另存清单为空（可能已被消费或流程已结束）resultCode=" + resultCode);
+            } else if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                copyOnePending(data.getData());
+            } else {
+                Log.w(TAG, "另存为 用户取消/未选择目标文件：resultCode=" + resultCode
+                        + " name=" + pendingSaveNames.get(0));
+                saveFlowActive = false;
                 toast("已取消另存");
+                finishSave(true);
             }
         }
     }
@@ -829,88 +873,306 @@ public class MainActivity extends Activity {
         return clip;
     }
 
-    /** 另存为：先用系统目录选择器（SAF）选目录，再逐个写入产物。 */
+    // ---------- 另存为（SAF） ----------
+
+    /**
+     * 另存为：把本轮产物保存到用户指定的位置。
+     * <p>单文件直接走 ACTION_CREATE_DOCUMENT（系统"保存副本"窗口，可存到任意位置，含 Download）；
+     * 多文件先尝试 ACTION_OPEN_DOCUMENT_TREE 一次授权写多份，拿不到授权时自动降级为逐张 CREATE_DOCUMENT。</p>
+     * <p>不能把"目录授权"当作唯一路径：targetSdk>=30 时系统禁止用 ACTION_OPEN_DOCUMENT_TREE 授权
+     * Download 根目录、内部存储根目录、Android/data、Android/obb（DocumentsUI 显示
+     * "Can't use this folder" 且 "USE THIS FOLDER" 置灰），此时永远拿不到 tree Uri。</p>
+     */
     private void startSaveTo(List<Uri> uris, List<String> names) {
         if (uris == null || uris.isEmpty()) {
+            Log.w(TAG, "另存为 被调用但产物列表为空");
             toast("没有可另存的文件");
             return;
         }
         pendingSaveUris = new ArrayList<>(uris);
-        pendingSaveNames = new ArrayList<>(names);
-        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
-                | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        pendingSaveNames = new ArrayList<>();
+        for (int i = 0; i < uris.size(); i++) {
+            String nm = (names != null && i < names.size()) ? names.get(i) : null;
+            pendingSaveNames.add((nm == null || nm.trim().isEmpty()) ? ("converted_" + (i + 1)) : nm);
+        }
+        saveOkNames = new ArrayList<>();
+        saveFailed = new ArrayList<>();
+        saveFlowActive = true;
+        // 单文件不需要目录授权（CREATE_DOCUMENT 一次选好文件名+位置）；多文件先试一次目录授权
+        treeTried = pendingSaveUris.size() < 2;
+        persistSavePending();
+        Log.i(TAG, "另存为 启动：待另存 " + pendingSaveUris.size() + " 个 " + pendingSaveNames
+                + "，首个环节=" + (treeTried ? "ACTION_CREATE_DOCUMENT（逐张）" : "ACTION_OPEN_DOCUMENT_TREE（一次授权）"));
+        nextSaveStep();
+    }
+
+    /** 推进另存流程：还有产物 → 发起下一次请求；清单已空 → 汇总收尾。 */
+    private void nextSaveStep() {
+        if (!saveFlowActive) return;
+        if (pendingSaveUris == null || pendingSaveUris.isEmpty()) {
+            finishSave(false);
+            return;
+        }
+        if (!treeTried) {
+            treeTried = true;
+            persistSavePending();
+            Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            Uri hint = initialTreeHint();
+            if (hint != null) i.putExtra(DocumentsContract.EXTRA_INITIAL_URI, hint);
+            Log.i(TAG, "另存为 请求目录授权：ACTION_OPEN_DOCUMENT_TREE（剩余 " + pendingSaveUris.size() + " 个产物）");
+            try {
+                startActivityForResult(i, REQ_SAVE_DIR);
+            } catch (Exception e) {
+                Log.w(TAG, "另存为 拉起目录选择器失败，降级为逐张另存 errType="
+                        + e.getClass().getSimpleName() + " errMsg=" + e.getMessage());
+                toast("当前系统不支持选择目录，改为逐个另存");
+                nextSaveStep();
+            }
+            return;
+        }
+        startSaveOne();
+    }
+
+    /** 目录选择器的起始位置提示：优先打开 Documents（Download 与存储根目录是受限目录，选了也无法授权）。 */
+    private Uri initialTreeHint() {
         try {
-            startActivityForResult(i, REQ_SAVE_DIR);
+            return Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADocuments");
         } catch (Exception e) {
-            pendingSaveUris = null;
-            pendingSaveNames = null;
-            toast("当前系统不支持选择目录");
+            return null;
         }
     }
 
-    /** 把暂存的产物逐个写入用户选定的目录；单个文件失败不影响其它文件。 */
-    private void saveToTree(Uri tree) {
-        final List<Uri> srcs = pendingSaveUris;
-        final List<String> names = pendingSaveNames;
-        pendingSaveUris = null;
-        pendingSaveNames = null;
-        if (srcs == null || srcs.isEmpty() || names == null) return;
+    /** 逐张另存：用 ACTION_CREATE_DOCUMENT 让用户为当前产物指定文件名与位置。 */
+    private void startSaveOne() {
+        final String nm = pendingSaveNames.get(0);
+        final String mime = OutputSaver.mimeOf(FormatKit.extOf(nm));
+        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType(mime);
+        i.putExtra(Intent.EXTRA_TITLE, nm);
+        int total = saveOkNames.size() + pendingSaveUris.size();
+        setStatus("另存 " + (saveOkNames.size() + 1) + "/" + total + "：" + nm, R.drawable.mouse_converting);
+        Log.i(TAG, "另存为 请求保存单文件：ACTION_CREATE_DOCUMENT name=" + nm + " mime=" + mime
+                + "（剩余 " + pendingSaveUris.size() + " 个）");
+        try {
+            startActivityForResult(i, REQ_SAVE_ONE);
+        } catch (Exception e) {
+            Log.e(TAG, "另存为 拉起保存窗口失败：name=" + nm + " errType="
+                    + e.getClass().getSimpleName() + " errMsg=" + e.getMessage());
+            toast("无法拉起系统保存窗口：" + briefMessage(e));
+            saveFailed.add(nm + "：" + briefMessage(e));
+            pendingSaveUris.remove(0);
+            pendingSaveNames.remove(0);
+            persistSavePending();
+            nextSaveStep();
+        }
+    }
 
-        setMascot(R.drawable.mouse_converting, "正在另存 0/" + srcs.size() + " …");
+    /** 把当前待另存的第一个产物写入用户新建的目标文档（系统已在目标位置建好空文件）。 */
+    private void copyOnePending(final Uri dst) {
+        final Uri src = pendingSaveUris.get(0);
+        final String nm = pendingSaveNames.get(0);
         new Thread(() -> {
-            final List<String> okNames = new ArrayList<>();
-            final List<String> fail = new ArrayList<>();
-            for (int i = 0; i < srcs.size(); i++) {
-                final int index = i;
-                final String nm = i < names.size() ? names.get(i) : ("converted_" + (i + 1));
-                // setStatus 内部自行切主线程，后台线程直接调用即可
-                setStatus("正在另存 " + (index + 1) + "/" + srcs.size() + "：" + nm,
-                        R.drawable.mouse_converting);
-                try {
-                    String ext = FormatKit.extOf(nm);
-                    Uri out = DocumentsContract.createDocument(getContentResolver(), tree,
-                            OutputSaver.mimeOf(ext), nm);
-                    if (out == null) throw new Exception("无法在所选目录创建文件");
-                    copyUri(srcs.get(i), out);
-                    okNames.add(nm);
-                } catch (Exception e) {
-                    fail.add(nm + "：" + briefMessage(e));
-                }
+            String failNote = null;
+            try {
+                Log.i(TAG, "另存(单张) 复制开始：name=" + nm + " src=" + src + " dst=" + dst);
+                long bytes = copyUri(src, dst);
+                String real = OutputSaver.displayNameOf(this, dst, nm);
+                Log.i(TAG, "另存(单张) 复制成功：name=" + real + " bytes=" + bytes + " dst=" + dst);
+                saveOkNames.add(real);
+            } catch (Exception e) {
+                Log.e(TAG, "另存(单张) 复制失败：name=" + nm + " errType="
+                        + e.getClass().getSimpleName() + " errMsg=" + e.getMessage());
+                saveFailed.add(nm + "：" + briefMessage(e));
+                failNote = "另存失败：" + briefMessage(e);
             }
+            final String note = failNote;
             runOnUiThread(() -> {
-                boolean allOk = fail.isEmpty();
-                setMascot(allOk ? R.drawable.mouse_success : R.drawable.mouse_error,
-                        allOk ? "已另存 " + okNames.size() + " 个文件"
-                              : "另存完成 " + okNames.size() + " 个，失败 " + fail.size() + " 个");
-                StringBuilder sb = new StringBuilder();
-                sb.append("已另存 ").append(okNames.size()).append(" / ").append(srcs.size())
-                        .append(" 个文件到所选目录");
-                for (String n : okNames) sb.append(" · ").append(n);
-                if (!fail.isEmpty()) {
-                    sb.append("；失败 ").append(fail.size()).append(" 个：");
-                    for (String f : fail) sb.append(" · ").append(f);
-                }
-                new AlertDialog.Builder(this)
-                        .setTitle("另存完成")
-                        .setMessage(sb.toString().trim())
-                        .setPositiveButton("好", null)
-                        .show();
+                pendingSaveUris.remove(0);
+                pendingSaveNames.remove(0);
+                persistSavePending();
+                if (note != null) toast(note);
+                nextSaveStep();
             });
         }).start();
     }
 
-    /** 把内容提供方里的产物字节流复制到目标 Uri。 */
-    private void copyUri(Uri src, Uri dst) throws Exception {
+    /** 把暂存的产物逐个写入用户选定的目录；单个文件失败不影响其它文件。 */
+    private void saveToTree(Uri tree, boolean persisted) {
+        final List<Uri> srcs = new ArrayList<>(pendingSaveUris);
+        final List<String> names = new ArrayList<>(pendingSaveNames);
+        setMascot(R.drawable.mouse_converting, "正在另存 0/" + srcs.size() + " …");
+        new Thread(() -> {
+            for (int i = 0; i < srcs.size(); i++) {
+                final int index = i;
+                final String nm = i < names.size() ? names.get(i) : ("converted_" + (i + 1));
+                // setStatus 内部自行切主线程，后台线程可直接调用
+                setStatus("正在另存 " + (index + 1) + "/" + srcs.size() + "：" + nm,
+                        R.drawable.mouse_converting);
+                try {
+                    Log.i(TAG, "另存(目录) 复制开始：name=" + nm + " src=" + srcs.get(i) + " tree=" + tree
+                            + " 持久化授权=" + (persisted ? "是" : "否"));
+                    Uri out = DocumentsContract.createDocument(getContentResolver(), tree,
+                            OutputSaver.mimeOf(FormatKit.extOf(nm)), nm);
+                    if (out == null) throw new Exception("所选目录未返回可写文件（可能没有写权限）");
+                    long bytes = copyUri(srcs.get(i), out);
+                    String real = OutputSaver.displayNameOf(this, out, nm);
+                    Log.i(TAG, "另存(目录) 复制成功：name=" + real + " bytes=" + bytes + " dst=" + out);
+                    saveOkNames.add(real);
+                } catch (Exception e) {
+                    Log.e(TAG, "另存(目录) 复制失败：name=" + nm + " errType="
+                            + e.getClass().getSimpleName() + " errMsg=" + e.getMessage());
+                    saveFailed.add(nm + "：" + briefMessage(e));
+                }
+            }
+            runOnUiThread(() -> {
+                pendingSaveUris.clear();
+                pendingSaveNames.clear();
+                persistSavePending();
+                finishSave(false);
+            });
+        }).start();
+    }
+
+    /** 另存收尾：清掉待另存缓存，写汇总日志，并用弹窗明确告知成功/失败。 */
+    private void finishSave(final boolean cancelled) {
+        saveFlowActive = false;
+        final int ok = saveOkNames == null ? 0 : saveOkNames.size();
+        final int bad = saveFailed == null ? 0 : saveFailed.size();
+        final List<String> okList = saveOkNames == null ? new ArrayList<>() : new ArrayList<>(saveOkNames);
+        final List<String> badList = saveFailed == null ? new ArrayList<>() : new ArrayList<>(saveFailed);
+        clearSavePending();
+        Log.i(TAG, "另存为 结束：成功=" + ok + " 失败=" + bad + " 是否用户取消=" + cancelled
+                + " 成功清单=" + okList + " 失败清单=" + badList);
+        if (ok == 0 && bad == 0) {
+            setMascot(R.drawable.mouse_idle, cancelled ? "已取消另存" : "没有可另存的文件");
+            return;
+        }
+        runOnUiThread(() -> {
+            setMascot(bad == 0 ? R.drawable.mouse_success : R.drawable.mouse_error,
+                    bad == 0 ? "已另存 " + ok + " 个文件" : "另存完成 " + ok + " 个，失败 " + bad + " 个");
+            StringBuilder sb = new StringBuilder();
+            if (ok > 0) {
+                sb.append("已另存 ").append(ok).append(" 个文件：\n");
+                for (String n : okList) sb.append("· ").append(n).append("\n");
+            } else {
+                sb.append("本次没有文件另存成功。\n");
+            }
+            if (bad > 0) {
+                sb.append("失败 ").append(bad).append(" 个：\n");
+                for (String f : badList) sb.append("· ").append(f).append("\n");
+            }
+            if (cancelled) sb.append("已取消剩余文件的另存。");
+            new AlertDialog.Builder(MainActivity.this)
+                    .setTitle(bad > 0 ? "另存完成（有失败）" : "另存完成")
+                    .setMessage(sb.toString().trim())
+                    .setPositiveButton("好", null)
+                    .show();
+        });
+    }
+
+    /** 把内容提供方里的产物字节流复制到目标 Uri，返回写入字节数。 */
+    private long copyUri(Uri src, Uri dst) throws Exception {
+        long total = 0;
         try (InputStream in = getContentResolver().openInputStream(src);
              OutputStream os = getContentResolver().openOutputStream(dst)) {
-            if (in == null || os == null) throw new Exception("无法读写所选目录");
+            if (in == null) throw new Exception("无法读取源文件");
+            if (os == null) throw new Exception("目标位置不可写");
             byte[] buf = new byte[8192];
             int n;
-            while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
+            while ((n = in.read(buf)) > 0) {
+                os.write(buf, 0, n);
+                total += n;
+            }
             os.flush();
         }
+        return total;
+    }
+
+    // ---------- 待另存清单持久化（防 Activity 被回收后静默丢失） ----------
+
+    private void persistSavePending() {
+        try {
+            SharedPreferences.Editor ed = getSharedPreferences(SAVE_PREF, MODE_PRIVATE).edit();
+            if (pendingSaveUris == null || pendingSaveUris.isEmpty()) {
+                ed.clear();
+            } else {
+                ed.putString(KEY_URIS, saveJoin(pendingSaveUris));
+                ed.putString(KEY_NAMES, saveJoin(pendingSaveNames));
+                ed.putBoolean(KEY_TREE_TRIED, treeTried);
+                ed.putString(KEY_OK, saveJoin(saveOkNames));
+                ed.putString(KEY_FAILED, saveJoin(saveFailed));
+            }
+            ed.apply();
+        } catch (Exception e) {
+            Log.w(TAG, "另存为 待另存清单持久化失败 errType=" + e.getClass().getSimpleName()
+                    + " errMsg=" + e.getMessage());
+        }
+    }
+
+    /**
+     * 若当前实例的待另存字段为空（Activity 被系统回收后重建），从磁盘恢复，避免静默丢弃：
+     * 旧实现里字段为 null 会直接 return，用户看不到任何成功/失败提示。
+     */
+    private void loadSavePendingIfNeeded() {
+        if (pendingSaveUris != null && !pendingSaveUris.isEmpty()) return;
+        try {
+            SharedPreferences sp = getSharedPreferences(SAVE_PREF, MODE_PRIVATE);
+            String rawUris = sp.getString(KEY_URIS, null);
+            if (rawUris == null || rawUris.isEmpty()) return;
+            List<Uri> uris = new ArrayList<>();
+            for (String s : rawUris.split("\n")) {
+                if (!s.isEmpty()) uris.add(Uri.parse(s));
+            }
+            if (uris.isEmpty()) return;
+            List<String> names = saveSplit(sp.getString(KEY_NAMES, ""));
+            while (names.size() < uris.size()) names.add("converted_" + (names.size() + 1));
+            pendingSaveUris = uris;
+            pendingSaveNames = names;
+            treeTried = sp.getBoolean(KEY_TREE_TRIED, true);
+            saveOkNames = saveSplit(sp.getString(KEY_OK, ""));
+            saveFailed = saveSplit(sp.getString(KEY_FAILED, ""));
+            saveFlowActive = true;
+            Log.i(TAG, "另存为 从持久化恢复待另存清单：" + uris.size() + " 个 " + names
+                    + "（Activity 可能被系统回收过）");
+        } catch (Exception e) {
+            Log.w(TAG, "另存为 恢复待另存清单失败 errType=" + e.getClass().getSimpleName()
+                    + " errMsg=" + e.getMessage());
+        }
+    }
+
+    private void clearSavePending() {
+        pendingSaveUris = null;
+        pendingSaveNames = null;
+        saveOkNames = null;
+        saveFailed = null;
+        try {
+            getSharedPreferences(SAVE_PREF, MODE_PRIVATE).edit().clear().apply();
+        } catch (Exception e) {
+            Log.w(TAG, "另存为 清理待另存缓存失败 errMsg=" + e.getMessage());
+        }
+    }
+
+    private static String saveJoin(List<?> list) {
+        if (list == null || list.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (Object o : list) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(String.valueOf(o).replace('\n', ' '));
+        }
+        return sb.toString();
+    }
+
+    private static List<String> saveSplit(String raw) {
+        List<String> out = new ArrayList<>();
+        if (raw == null || raw.isEmpty()) return out;
+        for (String s : raw.split("\n")) {
+            if (!s.isEmpty()) out.add(s);
+        }
+        return out;
     }
 
     @Override
