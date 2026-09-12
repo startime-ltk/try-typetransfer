@@ -78,7 +78,9 @@ public final class FormatKit {
         EXT_TARGETS.put("ico", imgTargets(new Target("png", "PNG"), new Target("jpg", "JPG"), new Target("webp", "WEBP"), new Target("pdf", "转 PDF")));
         EXT_TARGETS.put("tga", imgTargets(new Target("png", "PNG"), new Target("jpg", "JPG"), new Target("webp", "WEBP"), new Target("pdf", "转 PDF")));
         // PDF
-        EXT_TARGETS.put("pdf", targets(new Target("png", "PNG（逐页）"), new Target("jpg", "JPG（逐页）"), new Target("txt", "TXT 文本"), new Target("md", "MD 文本")));
+        EXT_TARGETS.put("pdf", targets(new Target("png", "PNG（逐页）"), new Target("jpg", "JPG（逐页）"),
+                new Target("txt", "TXT 文本"), new Target("md", "MD 文本"),
+                new Target("xlsx", "Excel 表格"), new Target("docx", "Word 文档")));
         // 文本
         EXT_TARGETS.put("txt", targets(new Target("md", "Markdown"), new Target("html", "HTML"), new Target("epub", "EPUB")));
         EXT_TARGETS.put("md", targets(new Target("html", "HTML"), new Target("txt", "TXT"), new Target("epub", "EPUB")));
@@ -181,7 +183,10 @@ public final class FormatKit {
         imgLines.add("图片 → OCR 提取 TXT / Markdown（离线识别中英文）");
         groups.add(new SummaryGroup("图片", imgLines));
 
-        groups.add(new SummaryGroup("PDF", Collections.singletonList(line("pdf"))));
+        List<String> pdfLines = new ArrayList<>();
+        pdfLines.add(line("pdf"));
+        pdfLines.add("PDF → Excel 表格 / Word 文档（结构还原：表格 + 段落/标题层级，离线可用）");
+        groups.add(new SummaryGroup("PDF", pdfLines));
         groups.add(new SummaryGroup("文本", Arrays.asList(line("txt"), line("md", "markdown"), line("html", "htm"))));
         groups.add(new SummaryGroup("数据", Arrays.asList(line("json"), line("xml"), line("csv"))));
         groups.add(new SummaryGroup("压缩包", Collections.singletonList(line("zip"))));

@@ -73,6 +73,8 @@ public final class OutputSaver {
         MIME.put("m4a", "audio/mp4");
         MIME.put("aac", "audio/aac");
         MIME.put("wav", "audio/wav");
+        MIME.put("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        MIME.put("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     }
 
     private OutputSaver() {

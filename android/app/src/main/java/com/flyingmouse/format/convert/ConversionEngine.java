@@ -189,8 +189,11 @@ public final class ConversionEngine {
         }
     }
 
-    // ---------- PDF → 逐页 PNG/JPG（打包 zip）/ 文本提取（txt、md） ----------
+    // ---------- PDF → 逐页 PNG/JPG（打包 zip）/ 文本提取（txt、md）/ 结构还原（xlsx、docx） ----------
     private static List<Output> convertPdf(Context ctx, Uri uri, String base, String targetId) throws Exception {
+        if ("xlsx".equals(targetId) || "docx".equals(targetId)) {
+            return convertPdfStructure(ctx, uri, base, targetId);
+        }
         if ("txt".equals(targetId) || "md".equals(targetId)) {
             byte[] pdf;
             try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
@@ -226,6 +229,51 @@ public final class ConversionEngine {
         } finally {
             deleteRecursive(outDir);
         }
+    }
+
+    /**
+     * PDF → xlsx / docx 智能结构还原（P6 后半）。
+     * 先做版面提取（带坐标的文本片段 + 矢量框线），再还原表格与段落/标题层级，最后导出 OOXML。
+     * 失败时按结构错误码给出可直接照做的提示（无文字层 / 无表格 / 无可还原内容）。
+     */
+    private static List<Output> convertPdfStructure(Context ctx, Uri uri, String base, String targetId) throws Exception {
+        byte[] pdf;
+        try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new Exception("无法读取 PDF");
+            pdf = readAllBytes(in);
+        }
+        PdfStructureTool.Document doc;
+        try {
+            doc = PdfStructureTool.analyze(pdf, base + ".pdf");
+        } catch (PdfStructureTool.StructureException se) {
+            Log.e(TAG, "PDF结构还原失败 target=" + targetId + " code=" + se.code + " msg=" + se.getMessage());
+            if (PdfStructureTool.E_NO_TEXT_LAYER.equals(se.code)) {
+                throw new Exception("该 PDF 没有可提取的文字层（扫描件或纯图片 PDF），无法还原表格与段落结构；"
+                        + "可改用「TXT 文本」（带离线 OCR）或「PNG（逐页）」后再处理。");
+            }
+            if (PdfStructureTool.E_NOT_READABLE.equals(se.code)) {
+                throw new Exception("PDF 无法解析（文件可能已损坏或被加密）：" + se.getMessage());
+            }
+            throw new Exception(se.getMessage());
+        }
+        Log.i(TAG, "PDF结构还原 " + base + "：页数=" + doc.pageCount + " 段落=" + doc.paragraphCount
+                + " 标题=" + doc.headingCount + " 表格=" + doc.tableCount + " 单元格=" + doc.cellCount
+                + (doc.hasReviewTable ? " 含低可信度表格(已标记复核)" : ""));
+        byte[] data;
+        try {
+            data = "xlsx".equals(targetId) ? PdfToXlsxExporter.export(doc) : PdfToDocxExporter.export(doc);
+        } catch (PdfStructureTool.StructureException se) {
+            Log.e(TAG, "PDF结构导出失败 target=" + targetId + " code=" + se.code + " msg=" + se.getMessage());
+            if (PdfStructureTool.E_TABLE_NOT_DETECTED.equals(se.code)) {
+                throw new Exception("未检测到可用表格，无法生成 Excel；该 PDF 可能只有段落文本，"
+                        + "可改用「Word 文档」或「TXT 文本」。");
+            }
+            throw new Exception(se.getMessage());
+        }
+        List<Output> outs = new ArrayList<>();
+        outs.add(new Output(base + "." + targetId, data));
+        Log.i(TAG, "PDF结构导出完成 " + base + "." + targetId + " bytes=" + data.length);
+        return outs;
     }
 
     // ---------- 文本类 ----------
